@@ -1,0 +1,68 @@
+# ============================================================
+# SECRETS — never commit these
+# ============================================================
+.env
+discord-bot-key.json
+*-key.json
+*.serviceaccount.json
+*credentials.json
+
+# ============================================================
+# Bundled portable runtimes (re-downloaded by install_*.bat)
+# ============================================================
+python/
+ffmpeg/
+ffmpeg-full.7z
+ffmpeg-tmp/
+opus-tools.zip
+opus-check/
+opus-temp/
+opus.dll
+opus.dll.bak
+libopus*.dll
+
+# ============================================================
+# Local data — user-specific, contains conversation history
+# ============================================================
+scott_memory.db
+scott_memory.db-journal
+scott_memory.db-wal
+scott_memory.db-shm
+
+# ============================================================
+# Diagnostic audio dumps
+# ============================================================
+stt_failed_*.wav
+last_cleaned_audio_for_listening.wav
+*.mp3
+*.wav
+
+# ============================================================
+# Python build / cache
+# ============================================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# ============================================================
+# IDE / editor / OS junk
+# ============================================================
+.idea/
+.vscode/
+.windsurf/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Archives the install scripts may leave behind
+# ============================================================
+*.7z
+*.zip
+*.tar.gz
+get-pip.py
