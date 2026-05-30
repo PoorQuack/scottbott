@@ -11,9 +11,44 @@ from conversation import PersistentConversationManager, _maybe_extract_fact
 from security import get_multimodal_content
 from prompts import get_system_prompt
 from services.ai import generate_chat_with_nim
-from services.search import _needs_search, web_search
+from services.search import web_search
 from ui import NotesEditModal
 from commands.scott import handle_scott
+
+
+NO_SEARCH_PHRASES = [
+    "ill stay", "i'll stay", "enjoying", "company", "you keep",
+    "calling me", "why do you", "how are you", "im good", "i'm good",
+    "lol", "haha", "thanks", "thank you", "okay", "ok", "sure",
+    "yes", "no", "maybe", "nice", "cool", "great", "wow"
+]
+
+SEARCH_SIGNALS = [
+    "?", "what is", "who is", "when did", "where is", "how does",
+    "latest", "news", "price", "weather", "score", "define",
+    "search for", "look up", "find me", "current", "today"
+]
+
+def needs_search(text: str) -> bool:
+    if not text:
+        return False
+    
+    # Strip mentions and clean
+    clean = re.sub(r"<@!?\d+>", "", text).strip().lower()
+    
+    # Too short to need search
+    if len(clean.split()) <= 4 and "?" not in clean:
+        return False
+    
+    # Conversational phrases — never search
+    if any(phrase in clean for phrase in NO_SEARCH_PHRASES):
+        return False
+    
+    # Only search if explicit signal present
+    if any(signal in clean for signal in SEARCH_SIGNALS):
+        return True
+    
+    return False  # default NO search
 
 
 # Discord Bot Setup
@@ -187,7 +222,7 @@ async def on_message(message):
             chat_user_message += "\n" + speaker_block
 
             search_context = ""
-            if _needs_search(user_message_text):
+            if needs_search(user_message_text):
                 search_query = user_message_text[:200]
                 search_context = await web_search(search_query)
                 if search_context:
