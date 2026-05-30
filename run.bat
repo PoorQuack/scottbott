@@ -69,7 +69,7 @@ set "PYTHON_CMD=%~dp0python\python.exe"
 :have_python
 
 REM --- Verify required deps; install on demand ---
-"%PYTHON_CMD%" -c "import discord, dotenv, google.genai, aiohttp, PIL" >nul 2>nul
+"%PYTHON_CMD%" -c "import discord, dotenv, google.genai, aiohttp, PIL, openai" >nul 2>nul
 if not %ERRORLEVEL%==0 (
     echo [run.bat] Installing/updating dependencies from requirements.txt ...
     "%PYTHON_CMD%" -m pip install --upgrade pip
