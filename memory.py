@@ -190,37 +190,27 @@ def add_memory(content: str, user_id: int = None, guild_id: int = None, importan
         conn.close()
 
 
-def _get_recent_memories(guild_id: int = None, limit: int = 5, user_id: int = None):
+def _get_recent_memories(user_id: int, guild_id: int = None, limit: int = 5):
     """Internal: get recent memories for the given user. Returns (content, user_id, user_name).
 
-    Only memories created BY user_id are returned. This prevents one user's
-    '!scott remember me as X' from being injected into another user's prompt.
+    ONLY memories created BY the specified user_id are returned. This prevents
+    one user's '!scott remember me as X' from being injected into another
+    user's prompt. user_id is required — there is no "all users" mode.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    if user_id is not None and guild_id:
+    if guild_id:
         cursor.execute('''
             SELECT content, user_id, user_name FROM memories
             WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
             ORDER BY created_at DESC LIMIT ?
         ''', (user_id, guild_id, limit))
-    elif user_id is not None:
+    else:
         cursor.execute('''
             SELECT content, user_id, user_name FROM memories
             WHERE user_id = ?
             ORDER BY created_at DESC LIMIT ?
         ''', (user_id, limit))
-    elif guild_id:
-        cursor.execute('''
-            SELECT content, user_id, user_name FROM memories
-            WHERE guild_id = ?
-            ORDER BY created_at DESC LIMIT ?
-        ''', (guild_id, limit))
-    else:
-        cursor.execute('''
-            SELECT content, user_id, user_name FROM memories
-            ORDER BY created_at DESC LIMIT ?
-        ''', (limit,))
     memories = cursor.fetchall()
     conn.close()
     return memories
