@@ -30,7 +30,7 @@ XAI_IMAGE_MODERATION = os.getenv("XAI_IMAGE_MODERATION", "none")
 # NVIDIA NIM
 NIM_API_KEY = os.getenv("NIM_API_KEY")
 NIM_BASE_URL = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NIM_MODEL = os.getenv("NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.2-3b-instruct")
 NIM_MODEL_COMPLEX = os.getenv("NIM_MODEL_COMPLEX", "moonshotai/kimi-k2.6")
 try:
     NIM_TIMEOUT_SIMPLE = float(os.getenv("NIM_TIMEOUT_SIMPLE", "30"))
