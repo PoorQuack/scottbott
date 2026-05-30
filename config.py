@@ -96,7 +96,7 @@ GEMINI_BASE_DELAY = 1.0
 GEMINI_MAX_DELAY = 60.0
 
 # Self-awareness
-SELF_AWARENESS_MAX_CHARS = 15000
+SELF_AWARENESS_MAX_CHARS = 0
 SELF_AWARENESS_EXCLUDE = {
     '.env', '.env.example', '__pycache__', '.venv', '.git',
     'ssh-key', 'gen-lang', 'client-', 'serviceaccount',
