@@ -1,8 +1,8 @@
 import asyncio
 import random
-import httpx
 from google import genai
 from google.genai.errors import ServerError
+from openai import AsyncOpenAI, APIError, BadRequestError
 from config import (
     GOOGLE_API_KEY,
     NIM_API_KEY,
@@ -19,6 +19,13 @@ from config import (
 )
 
 client = genai.Client(api_key=GOOGLE_API_KEY, http_options={'api_version': 'v1alpha'})
+
+# NVIDIA NIM OpenAI-compatible client
+nim_client = AsyncOpenAI(
+    base_url=NIM_BASE_URL,
+    api_key=NIM_API_KEY,
+    timeout=NIM_TIMEOUT,
+)
 
 
 async def generate_content_with_retry(model, contents, config=None, max_retries=GEMINI_MAX_RETRIES):
@@ -91,7 +98,7 @@ def _extract_audio(response):
 
 
 async def generate_chat_with_nim(system_prompt: str, user_message: str, conversation_history: list = None) -> str:
-    """Generate a chat response using NVIDIA NIM (OpenAI-compatible)."""
+    """Generate a chat response using NVIDIA NIM via OpenAI-compatible client."""
     if not NIM_API_KEY:
         raise ValueError("NIM_API_KEY not set")
 
@@ -115,12 +122,7 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
 
     messages.append({"role": "user", "content": user_message})
 
-    headers = {
-        "Authorization": f"Bearer {NIM_API_KEY}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    payload = {
+    kwargs = {
         "model": NIM_MODEL,
         "messages": messages,
         "temperature": SCOTT_TEMP,
@@ -129,39 +131,25 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
         "stream": False,
     }
     if NIM_REASONING_EFFORT:
-        payload["reasoning_effort"] = NIM_REASONING_EFFORT
-
-    endpoint = NIM_BASE_URL.rstrip("/") + "/chat/completions"
+        kwargs["reasoning_effort"] = NIM_REASONING_EFFORT
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(endpoint, headers=headers, json=payload, timeout=NIM_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-    except httpx.HTTPStatusError as e:
-        body = ""
-        try:
-            body = e.response.text[:500]
-        except Exception:
-            pass
-        print(f"[NIM] HTTP error: {e.response.status_code} - {body}")
-        if e.response.status_code == 400 and "reasoning_effort" in body and NIM_REASONING_EFFORT:
+        completion = await nim_client.chat.completions.create(**kwargs)
+        return completion.choices[0].message.content
+    except BadRequestError as e:
+        body = str(e)
+        print(f"[NIM] BadRequest: {body}")
+        if "reasoning_effort" in body and NIM_REASONING_EFFORT:
             print("[NIM] Retrying without reasoning_effort...")
-            payload.pop("reasoning_effort", None)
+            kwargs.pop("reasoning_effort", None)
             try:
-                async with httpx.AsyncClient() as http:
-                    resp = await http.post(endpoint, headers=headers, json=payload, timeout=NIM_TIMEOUT)
-                    resp.raise_for_status()
-                    return resp.json()["choices"][0]["message"]["content"]
+                completion = await nim_client.chat.completions.create(**kwargs)
+                return completion.choices[0].message.content
             except Exception as e2:
                 print(f"[NIM] Retry failed: {type(e2).__name__}: {e2}")
         return None
-    except httpx.RequestError as e:
-        print(f"[NIM] Request error: {e}")
-        return None
-    except (KeyError, IndexError) as e:
-        print(f"[NIM] Response parsing error: {e}")
+    except APIError as e:
+        print(f"[NIM] API error: {type(e).__name__}: {e}")
         return None
     except Exception as e:
         print(f"[NIM] Unexpected error: {type(e).__name__}: {e}")

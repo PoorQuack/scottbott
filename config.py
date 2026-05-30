@@ -30,7 +30,7 @@ XAI_IMAGE_MODERATION = os.getenv("XAI_IMAGE_MODERATION", "none")
 # NVIDIA NIM
 NIM_API_KEY = os.getenv("NIM_API_KEY")
 NIM_BASE_URL = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NIM_MODEL = os.getenv("NIM_MODEL", "mistralai/mistral-small-4-119b-2603")
+NIM_MODEL = os.getenv("NIM_MODEL", "deepseek-ai/deepseek-v4-pro")
 try:
     NIM_TIMEOUT = float(os.getenv("NIM_TIMEOUT", "1200"))
 except ValueError:
