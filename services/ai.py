@@ -194,7 +194,7 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
     try:
         contents = []
         if system_prompt:
-            contents.append(genai.types.Part.from_text(system_prompt))
+            contents.append(genai.types.Part(text=system_prompt))
         if conversation_history:
             for msg in conversation_history:
                 if not (hasattr(msg, 'role') and hasattr(msg, 'parts')):
@@ -202,8 +202,8 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
                 role = "user" if msg.role == "user" else "model"
                 for part in (msg.parts or []):
                     if hasattr(part, 'text') and part.text:
-                        contents.append(genai.types.Part.from_text(part.text))
-        contents.append(genai.types.Part.from_text(user_message))
+                        contents.append(genai.types.Part(text=part.text))
+        contents.append(genai.types.Part(text=user_message))
 
         start = time.time()
         response = await generate_content_with_retry("gemini-2.5-flash", genai.types.Content(parts=contents))
