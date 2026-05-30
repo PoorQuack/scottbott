@@ -1,12 +1,12 @@
 # Scottbott
 
-A Discord bot with a configurable personality, persistent memory, image generation, and music generation — all powered by Google's Gemini API.
+A Discord bot with a configurable personality, persistent memory, image generation, and music generation. Chat powered by DeepSeek V4 Pro via NVIDIA NIM; image and music generation still use Google's Gemini API.
 
 Lightweight by design: no voice chat, no audio decoding, no native libs. Runs comfortably on a 1 GB / 1 OCPU VM.
 
 ## Features
 
-- **Text chat** with Gemini, persistent per-channel context (50-message rolling window backed by SQLite)
+- **Text chat** with DeepSeek V4 Pro via NVIDIA NIM, persistent per-channel context backed by SQLite. Mention/reply flows use a focused 10-message slice to reduce cross-user contamination; the full 50-message window is still stored for continuity.
 - **Per-user memory** — `!scott remember [text]` / `!scott forget [text]` / `!scott facts [@user]`
 - **Image generation** — `!scott image [prompt]`
 - **Music generation** (Lyria 3) — `!scott song [prompt]` for a 30-second clip, `!scott song long [prompt]` for a full song with vocals
@@ -42,12 +42,15 @@ scottbott/
 
 ## Prerequisites
 
-You need two things before the bot can run:
+You need three things before the bot can run:
 
 1. **A Discord bot token.** Create an application at https://discord.com/developers/applications, add a Bot, copy the token, enable the *Server Members* and *Message Content* intents.
-2. **A Gemini API key.** Get one for free at https://aistudio.google.com/. Used for text chat, image generation, and music generation.
+2. **NVIDIA API key.** Used for text chat via NVIDIA NIM. Get one at https://build.nvidia.com/
+3. **Gemini API key.** Used for image generation and music generation (Lyria). Get one free at https://aistudio.google.com/
 
-That's it — no service account, no Cloud project setup needed for the basic bot. (You only need a Cloud project with billing if you want to use `!scott song`.)
+You only need a Gemini key if you plan to use `!scott image` or `!scott song`. Text chat works with just the NVIDIA key.
+
+You only need a Google Cloud project with billing if you want to use `!scott song`.
 
 ## Local setup (Windows)
 
@@ -227,6 +230,12 @@ The script:
 4. Waits and checks the service is actually active
 
 If the deploy fails, your DB backup is in `~/scottbott/backups/`.
+
+## Architecture notes
+
+**Speaker isolation.** The bot uses a structured `--- SPEAKER CONTEXT ---` block injected right before each user turn: `ACTIVE_USER_ID`, `ACTIVE_USERNAME`, `REPLY_ONLY_TO`, `IGNORE_OTHER_NAMES`, and `REPLIED_TO_USER_ID/REPLIED_TO_USERNAME` when replying to another user. A one-pass validator reruns the model once if the response accidentally names a wrong user from the recent history.
+
+**Memory TTL.** Facts are tagged at write time (`personal`, `contextual`, or `session`). Only `personal` facts are injected by default; `contextual` facts expire after 14 days and `session` facts after 2 days. The memory context block is hard-limited to ~200 tokens, dropping oldest items first so only the most recent facts survive.
 
 ## Troubleshooting
 
