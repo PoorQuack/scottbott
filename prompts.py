@@ -1,58 +1,7 @@
 import os
 from datetime import datetime, timezone
-from config import BOT_ID, CREATOR_ID, SELF_AWARENESS_MAX_CHARS, SELF_AWARENESS_EXCLUDE, SELF_AWARENESS_EXTENSIONS
+from config import BOT_ID, CREATOR_ID
 from memory import build_memory_context, get_guild_personality
-
-
-def get_codebase_context() -> str:
-    """Read the bot's own codebase to give it self-awareness (excluding .env and sensitive files)."""
-    try:
-        bot_dir = os.path.dirname(os.path.abspath(__file__))
-        codebase_parts = []
-        total_chars = 0
-
-        for root, dirs, files in os.walk(bot_dir):
-            dirs[:] = [d for d in dirs if d not in SELF_AWARENESS_EXCLUDE and not d.startswith('.')]
-
-            for file in sorted(files):
-                if any(excl in file for excl in SELF_AWARENESS_EXCLUDE):
-                    continue
-                ext = os.path.splitext(file)[1].lower()
-                if ext not in SELF_AWARENESS_EXTENSIONS:
-                    continue
-
-                filepath = os.path.join(root, file)
-                rel_path = os.path.relpath(filepath, bot_dir)
-
-                try:
-                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-
-                    if len(content) > 5000:
-                        content = content[:5000] + f"\n\n[... File truncated, full length: {len(content)} chars ...]"
-
-                    file_section = f"\n=== {rel_path} ===\n{content}\n"
-
-                    if total_chars + len(file_section) > SELF_AWARENESS_MAX_CHARS:
-                        remaining = SELF_AWARENESS_MAX_CHARS - total_chars
-                        if remaining > 100:
-                            file_section = file_section[:remaining] + "\n[... CODEBASE TRUNCATED DUE TO SIZE LIMIT ...]"
-                            codebase_parts.append(file_section)
-                        break
-
-                    codebase_parts.append(file_section)
-                    total_chars += len(file_section)
-
-                except Exception as e:
-                    codebase_parts.append(f"\n=== {rel_path} ===\n[Error reading file: {e}]\n")
-
-        if not codebase_parts:
-            return ""
-
-        return "[YOUR OWN CODEBASE - You can see your own source files to understand your capabilities and suggest improvements]\n" + "".join(codebase_parts)
-
-    except Exception as e:
-        return f"[Error loading codebase context: {e}]"
 
 
 def _build_default_personality_text() -> str:
@@ -143,9 +92,7 @@ ENERGY MATCHING RULE:
 - Long detailed question → detailed reply
 - Never give a 3-paragraph response to "lol ok"
 
-Respond naturally. Do not perform your personality, just be it.{user_section}{memory_section}
-
-{get_codebase_context()}"""
+Respond naturally. Do not perform your personality, just be it.{user_section}{memory_section}"""
 
     return f"""You are Scottbott, a Discord bot.
 
@@ -185,6 +132,4 @@ ENERGY MATCHING RULE:
 - Long detailed question → detailed reply
 - Never give a 3-paragraph response to "lol ok"
 
-Respond naturally. Do not perform your personality, just be it.{user_section}{memory_section}
-
-{get_codebase_context()}"""
+Respond naturally. Do not perform your personality, just be it.{user_section}{memory_section}"""
