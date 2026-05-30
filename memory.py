@@ -1,6 +1,9 @@
-"""SQLite database module for persistent bot memory."""
+"""SQLite database module for persistent bot memory.
+
+Core persistence layer for conversation history, user facts, notes,
+and per-guild personality overrides.
+"""
 import sqlite3
-from datetime import datetime
 
 DB_FILE = "scott_memory.db"
 
@@ -8,6 +11,7 @@ DB_FILE = "scott_memory.db"
 class MessageWithMeta:
     """Wrapper for Content that includes user metadata.
     Defined here to avoid circular imports with scottbott.py"""
+
     def __init__(self, content, user_id: int = None, user_name: str = None):
         self.content = content
         self.user_id = user_id
@@ -21,7 +25,7 @@ def init_db():
     """Initialize the SQLite database with tables for memories."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
+
     # Store facts about users (preferences, important info)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_facts (
@@ -41,17 +45,7 @@ def init_db():
         cursor.execute('ALTER TABLE user_facts ADD COLUMN user_name TEXT')
     except sqlite3.OperationalError:
         pass  # Column already exists
-    
-    # Store conversation summaries per channel
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS channel_summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER NOT NULL UNIQUE,
-            summary TEXT,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
+
     # Store important events/milestones
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS memories (
@@ -64,11 +58,10 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Add user_name column if it doesn't exist (for existing databases)
     try:
         cursor.execute('ALTER TABLE memories ADD COLUMN user_name TEXT')
     except sqlite3.OperationalError:
-        pass  # Column already exists
+        pass
 
     # Store conversation history per channel
     cursor.execute('''
@@ -85,17 +78,37 @@ def init_db():
             UNIQUE(channel_id, message_order)
         )
     ''')
-    # Add user_name column if it doesn't exist (for existing databases)
     try:
         cursor.execute('ALTER TABLE channel_messages ADD COLUMN user_name TEXT')
     except sqlite3.OperationalError:
-        pass  # Column already exists
-    
+        pass
+
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_channel_messages 
+        CREATE INDEX IF NOT EXISTS idx_channel_messages
         ON channel_messages(channel_id, message_order)
     ''')
-    
+
+    # Per-guild personality overrides (admin-configurable)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS guild_personality (
+            guild_id INTEGER PRIMARY KEY,
+            personality_text TEXT NOT NULL,
+            set_by_user_id INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Per-user freeform notes (editable via !scott editnotes / /editnotes)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_notes (
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER,
+            notes TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, guild_id)
+        )
+    ''')
+
     conn.commit()
     conn.close()
     print("Database initialized.")
@@ -106,14 +119,12 @@ def add_user_fact(user_id: int, fact: str, guild_id: int = None, category: str =
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # Try to update existing fact to preserve created_at
         cursor.execute('''
             UPDATE user_facts
             SET category = ?, updated_at = CURRENT_TIMESTAMP, guild_id = ?, user_name = ?
             WHERE user_id = ? AND fact = ?
         ''', (category, guild_id, user_name, user_id, fact))
 
-        # If no row was updated, insert new fact
         if cursor.rowcount == 0:
             cursor.execute('''
                 INSERT INTO user_facts (user_id, user_name, guild_id, fact, category, created_at, updated_at)
@@ -127,20 +138,35 @@ def add_user_fact(user_id: int, fact: str, guild_id: int = None, category: str =
         conn.close()
 
 
-def get_user_facts(user_id: int, guild_id: int = None, limit: int = 10):
-    """Retrieve facts about a user. Returns (fact, category, user_name)."""
+def get_user_facts(user_id: int, guild_id: int = None, limit: int = 10, include_all_guilds: bool = False):
+    """Retrieve facts about a user. Returns (fact, category, user_name).
+
+    Args:
+        user_id: The user to retrieve facts for
+        guild_id: Guild context (None for global/DM context)
+        limit: Maximum facts to return
+        include_all_guilds: If True and guild_id is None, return facts from all guilds.
+                           If False (default), guild_id=None only returns global facts.
+    """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     if guild_id:
         cursor.execute('''
-            SELECT fact, category, user_name FROM user_facts 
+            SELECT fact, category, user_name FROM user_facts
             WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
             ORDER BY updated_at DESC LIMIT ?
         ''', (user_id, guild_id, limit))
-    else:
+    elif include_all_guilds:
         cursor.execute('''
-            SELECT fact, category, user_name FROM user_facts 
+            SELECT fact, category, user_name FROM user_facts
             WHERE user_id = ?
+            ORDER BY updated_at DESC LIMIT ?
+        ''', (user_id, limit))
+    else:
+        # DMs / global: only return global facts to prevent cross-guild leaks
+        cursor.execute('''
+            SELECT fact, category, user_name FROM user_facts
+            WHERE user_id = ? AND guild_id IS NULL
             ORDER BY updated_at DESC LIMIT ?
         ''', (user_id, limit))
     facts = cursor.fetchall()
@@ -164,13 +190,11 @@ def add_memory(content: str, user_id: int = None, guild_id: int = None, importan
         conn.close()
 
 
-def get_recent_memories(guild_id: int = None, limit: int = 5, user_id: int = None):
-    """Get recent important memories. Returns (content, user_id, user_name).
+def _get_recent_memories(guild_id: int = None, limit: int = 5, user_id: int = None):
+    """Internal: get recent memories for the given user. Returns (content, user_id, user_name).
 
-    When user_id is given, only memories created BY that user are returned.
-    This prevents one user's '!scott remember me as X' from being injected
-    into another user's system prompt — a leak that makes the model treat
-    the first user's name as a global attribute.
+    Only memories created BY user_id are returned. This prevents one user's
+    '!scott remember me as X' from being injected into another user's prompt.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -202,48 +226,164 @@ def get_recent_memories(guild_id: int = None, limit: int = 5, user_id: int = Non
     return memories
 
 
-def delete_memory(user_id: int, content: str) -> int:
-    """Delete a specific memory. Returns number of rows deleted."""
+def search_memories(user_id: int, keyword: str, guild_id: int = None) -> list:
+    """Search both memories and user_facts for a user by keyword (case-insensitive partial match).
+    When guild_id is given, restricts results to that guild plus global (NULL) entries.
+    Returns list of (table, id, text) tuples."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM memories WHERE user_id = ? AND content = ?', (user_id, content))
+    results = []
+    kw = f"%{keyword.lower()}%"
+
+    if guild_id:
+        cursor.execute(
+            'SELECT id, content FROM memories WHERE user_id = ? AND LOWER(content) LIKE ? '
+            'AND (guild_id = ? OR guild_id IS NULL)',
+            (user_id, kw, guild_id)
+        )
+    else:
+        cursor.execute(
+            'SELECT id, content FROM memories WHERE user_id = ? AND LOWER(content) LIKE ? '
+            'AND guild_id IS NULL',
+            (user_id, kw)
+        )
+    for row in cursor.fetchall():
+        results.append(('memory', row[0], row[1]))
+
+    if guild_id:
+        cursor.execute(
+            'SELECT id, fact FROM user_facts WHERE user_id = ? AND LOWER(fact) LIKE ? '
+            'AND (guild_id = ? OR guild_id IS NULL)',
+            (user_id, kw, guild_id)
+        )
+    else:
+        cursor.execute(
+            'SELECT id, fact FROM user_facts WHERE user_id = ? AND LOWER(fact) LIKE ? '
+            'AND guild_id IS NULL',
+            (user_id, kw)
+        )
+    for row in cursor.fetchall():
+        results.append(('fact', row[0], row[1]))
+
+    conn.close()
+    return results
+
+
+def delete_by_id(table: str, row_id: int) -> int:
+    """Delete a memory or fact by its database ID. Returns rows deleted."""
+    if table not in ('memory', 'fact'):
+        return 0
+    real_table = 'memories' if table == 'memory' else 'user_facts'
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(f'DELETE FROM {real_table} WHERE id = ?', (row_id,))
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
     return deleted
 
 
+def get_user_notes(user_id: int, guild_id: int = None) -> str:
+    """Return the user's freeform notes string, or empty string if none."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        if guild_id:
+            cursor.execute(
+                'SELECT notes FROM user_notes WHERE user_id = ? AND guild_id = ?',
+                (user_id, guild_id)
+            )
+        else:
+            cursor.execute(
+                'SELECT notes FROM user_notes WHERE user_id = ? AND guild_id IS NULL',
+                (user_id,)
+            )
+        row = cursor.fetchone()
+        return row[0] if row else ""
+    except Exception as e:
+        print(f"[UserNotes] Error getting notes for user {user_id}: {e}")
+        return ""
+    finally:
+        conn.close()
+
+
+def set_user_notes(user_id: int, notes: str, guild_id: int = None) -> bool:
+    """Save (upsert) freeform notes for a user. Returns True on success."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO user_notes (user_id, guild_id, notes, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                notes = excluded.notes,
+                updated_at = CURRENT_TIMESTAMP
+        ''', (user_id, guild_id, notes))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[UserNotes] Error setting notes for user {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def clear_user_notes(user_id: int, guild_id: int = None) -> bool:
+    """Delete a user's notes. Returns True if a row was deleted."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        if guild_id:
+            cursor.execute(
+                'DELETE FROM user_notes WHERE user_id = ? AND guild_id = ?',
+                (user_id, guild_id)
+            )
+        else:
+            cursor.execute(
+                'DELETE FROM user_notes WHERE user_id = ? AND guild_id IS NULL',
+                (user_id,)
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"[UserNotes] Error clearing notes for user {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def build_memory_context(user_id: int = None, guild_id: int = None):
     """Build a context string with relevant memories for the AI.
 
     Only includes facts and memories belonging to the CURRENT user. This is
-    important because the AI uses these to know who it's talking to — leaking
+    important because the AI uses these to know who it's talking to; leaking
     another user's 'remember me as X' makes it call everyone X.
     """
     context_parts = []
 
-    # Get user facts
     if user_id:
         facts = get_user_facts(user_id, guild_id)
         if facts:
-            # Get the user name from the first fact (all should be same user)
             first_user_name = facts[0][2] if facts[0][2] else f"User {user_id}"
             context_parts.append(
                 f"Facts about the CURRENT user ({first_user_name}, ID {user_id}). "
                 f"These apply ONLY to this user, not to anyone else:"
             )
-            for fact, category, user_name in facts:
+            for fact, category, _user_name in facts:
                 context_parts.append(f"  - [{category}] {fact}")
 
-    # Get recent memories — ONLY for the current user.
-    # Previously this fetched guild-wide memories, which leaked one user's
-    # personal '!scott remember me as X' into other users' context.
     if user_id:
-        memories = get_recent_memories(guild_id=guild_id, user_id=user_id)
+        memories = _get_recent_memories(guild_id=guild_id, user_id=user_id)
         if memories:
             context_parts.append("\nThings the CURRENT user has asked you to remember:")
-            for content, mem_user_id, mem_user_name in memories:
+            for content, _mem_user_id, _mem_user_name in memories:
                 context_parts.append(f"  - {content}")
+
+    if user_id:
+        notes = get_user_notes(user_id, guild_id)
+        if notes:
+            context_parts.append("\nUser's personal notes (they wrote these themselves for you to know):")
+            context_parts.append(notes)
 
     return "\n".join(context_parts) if context_parts else ""
 
@@ -254,27 +394,22 @@ def save_channel_messages(channel_id: int, messages: list):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # Clear existing messages for this channel
         cursor.execute('DELETE FROM channel_messages WHERE channel_id = ?', (channel_id,))
-        
-        # Insert new messages
+
         for idx, msg in enumerate(messages):
             # Handle MessageWithMeta wrapper or plain Content
             if hasattr(msg, 'content'):
-                # It's a MessageWithMeta wrapper
                 content_obj = msg.content
                 user_id = getattr(msg, 'user_id', None)
                 user_name = getattr(msg, 'user_name', None)
             else:
-                # It's a plain Content object (legacy or model response)
                 content_obj = msg
                 user_id = None
                 user_name = None
-            
+
             role = getattr(content_obj, 'role', 'user')
             parts = getattr(content_obj, 'parts', [])
-            
-            # Extract text content and check for images
+
             text_parts = []
             has_image = False
             for part in parts:
@@ -282,23 +417,22 @@ def save_channel_messages(channel_id: int, messages: list):
                     text_parts.append(part.text)
                 elif hasattr(part, 'inline_data') and part.inline_data:
                     has_image = True
-                    # Store image metadata, not the binary data
                     text_parts.append("[Image attached]")
-            
+
             raw_content = "\n".join(text_parts) if text_parts else ""
-            
-            # Include user attribution in content for context
+
+            # Prefix user attribution into stored content for context
             if role == 'user' and user_name:
                 content = f"[{user_name}]: {raw_content}"
             else:
                 content = raw_content
-            
+
             cursor.execute('''
-                INSERT INTO channel_messages 
+                INSERT INTO channel_messages
                 (channel_id, message_order, role, content, has_image, user_id, user_name)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (channel_id, idx, role, content, has_image, user_id, user_name))
-        
+
         conn.commit()
     except Exception as e:
         print(f"Error saving channel messages: {e}")
@@ -319,27 +453,21 @@ def load_channel_messages(channel_id: int, limit: int = 50):
             ORDER BY message_order
             LIMIT ?
         ''', (channel_id, limit))
-        
+
         for row in cursor.fetchall():
-            role, content, has_image, user_id, db_user_name = row
-            
-            # Use stored user_name if available, otherwise parse from content
+            role, content, _has_image, user_id, db_user_name = row
+
             user_name = db_user_name
-            display_content = content
-            
             if not user_name and role == 'user' and content.startswith('['):
-                # Parse username from content (format: "[Username]: message")
                 end_bracket = content.find(']: ')
                 if end_bracket != -1:
                     user_name = content[1:end_bracket]
-                    display_content = content[end_bracket + 3:]
-            
-            parts = [types.Part(text=display_content)]
+            # Preserve full content including the [Username]: prefix
+            # so downstream models can identify who said what.
+
+            parts = [types.Part(text=content)]
             content_obj = types.Content(role=role, parts=parts)
-            
-            # Wrap in MessageWithMeta
-            msg = MessageWithMeta(content_obj, user_id=user_id, user_name=user_name)
-            messages.append(msg)
+            messages.append(MessageWithMeta(content_obj, user_id=user_id, user_name=user_name))
     except Exception as e:
         print(f"Error loading channel messages: {e}")
     finally:
@@ -347,70 +475,61 @@ def load_channel_messages(channel_id: int, limit: int = 50):
     return messages
 
 
-def prune_channel_history(channel_id: int = None, max_messages: int = 50):
-    """Prune old messages to keep only recent history. If channel_id is None, prunes all channels."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    try:
-        if channel_id:
-            # Keep only the most recent max_messages for this channel
-            cursor.execute('''
-                DELETE FROM channel_messages 
-                WHERE channel_id = ? 
-                AND message_order < (
-                    SELECT MAX(message_order) - ? 
-                    FROM channel_messages 
-                    WHERE channel_id = ?
-                )
-            ''', (channel_id, max_messages, channel_id))
-        else:
-            # Prune all channels - keep last max_messages per channel
-            cursor.execute('''
-                DELETE FROM channel_messages 
-                WHERE id IN (
-                    SELECT id FROM channel_messages cm1
-                    WHERE message_order < (
-                        SELECT MAX(message_order) - ? 
-                        FROM channel_messages cm2 
-                        WHERE cm2.channel_id = cm1.channel_id
-                    )
-                )
-            ''', (max_messages,))
-        conn.commit()
-    except Exception as e:
-        print(f"Error pruning channel history: {e}")
-    finally:
-        conn.close()
-
-
-def clear_channel_history(channel_id: int):
-    """Clear all conversation history for a specific channel."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    try:
-        cursor.execute('DELETE FROM channel_messages WHERE channel_id = ?', (channel_id,))
-        conn.commit()
-    except Exception as e:
-        print(f"Error clearing channel history: {e}")
-    finally:
-        conn.close()
-
-
-def get_active_channels(limit: int = 100):
-    """Get list of channel IDs with conversation history, ordered by most recent activity."""
+def set_guild_personality(guild_id: int, personality_text: str, set_by_user_id: int) -> bool:
+    """Set or update the per-guild personality override.
+    Returns True if successful."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            SELECT channel_id, MAX(timestamp) as last_active
-            FROM channel_messages
-            GROUP BY channel_id
-            ORDER BY last_active DESC
-            LIMIT ?
-        ''', (limit,))
-        return [row[0] for row in cursor.fetchall()]
+            INSERT INTO guild_personality (guild_id, personality_text, set_by_user_id, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                personality_text = excluded.personality_text,
+                set_by_user_id = excluded.set_by_user_id,
+                updated_at = CURRENT_TIMESTAMP
+        ''', (guild_id, personality_text, set_by_user_id))
+        conn.commit()
+        print(f"[GuildPersonality] Set personality for guild {guild_id} by user {set_by_user_id}")
+        return True
     except Exception as e:
-        print(f"Error getting active channels: {e}")
-        return []
+        print(f"[GuildPersonality] Error setting personality for guild {guild_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_guild_personality(guild_id: int) -> str:
+    """Get the per-guild personality override text. Returns None if not set."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'SELECT personality_text FROM guild_personality WHERE guild_id = ?',
+            (guild_id,)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        print(f"[GuildPersonality] Error getting personality for guild {guild_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def reset_guild_personality(guild_id: int) -> bool:
+    """Delete the per-guild personality override. Returns True if deleted."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('DELETE FROM guild_personality WHERE guild_id = ?', (guild_id,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            print(f"[GuildPersonality] Reset personality for guild {guild_id}")
+        return deleted
+    except Exception as e:
+        print(f"[GuildPersonality] Error resetting personality for guild {guild_id}: {e}")
+        return False
     finally:
         conn.close()

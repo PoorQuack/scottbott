@@ -16,12 +16,27 @@ Lightweight by design: no voice chat, no audio decoding, no native libs. Runs co
 
 ```
 scottbott/
-├── scottbott.py        Main bot entry point and command handlers
+├── scottbott.py        Main bot entry point (thin wiring layer)
+├── config.py           Centralised environment & constant configuration
 ├── memory.py           SQLite-backed memory and conversation persistence
-├── requirements.txt    Python dependencies (5 packages)
+├── conversation.py     In-memory LRU cache + SQLite conversation storage
+├── security.py         File upload scanning, rate limits, replay protection
+├── prompts.py          System prompt builder & self-awareness context
+├── ui.py               Discord modals & views (notes, personality editor)
+├── commands/
+│   └── scott.py        !scott subcommand handlers
+├── services/
+│   ├── ai.py           Gemini retry & NVIDIA NIM chat backend
+│   ├── images.py       Replicate image generation + Grok prompt expansion
+│   ├── music.py        Lyria song generation
+│   └── search.py       DuckDuckGo web search
+├── scripts/
+│   ├── deploy.sh       Git-pull deploy with DB backup + service restart
+│   ├── logrotate-scottbott   Logrotate config
+│   └── install-logrotate.sh  Installs logrotate config
+├── requirements.txt    Python dependencies
 ├── run.bat             Windows launcher (auto-installs Python on first run)
-├── install_python.bat  Bootstraps a portable Python 3.11 in ./python/
-├── .env.example        Template for .env (fill in your secrets)
+├── .env.local.example  Template for .env (fill in your secrets)
 └── README.md
 ```
 
@@ -37,7 +52,7 @@ That's it — no service account, no Cloud project setup needed for the basic bo
 ## Local setup (Windows)
 
 1. Clone the repo: `git clone https://github.com/<you>/scottbott.git`
-2. Copy `.env.example` to `.env` and fill in your tokens / API keys.
+2. Copy `.env.local.example` to `.env` and fill in your tokens / API keys.
 3. Double-click `run.bat`.
 
 The launcher auto-installs a portable Python 3.11 to `./python/` on first run, then starts the bot. No system-wide installs.
@@ -57,7 +72,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Configure
-cp .env.example .env
+cp .env.local.example .env
 # edit .env with your tokens
 
 # Run
@@ -166,15 +181,30 @@ sudo systemctl start scottbott
 sudo systemctl status scottbott
 ```
 
+### 4b. Add log rotation
+
+The service writes to `/var/log/scottbott.log`. Without rotation that file will grow forever. Install the bundled logrotate config:
+
+```bash
+cd scottbott
+sudo bash scripts/install-logrotate.sh
+```
+
+This keeps 14 days of compressed logs. You can verify it works with:
+
+```bash
+sudo logrotate -d /etc/logrotate.d/scottbott
+```
+
 Check logs:
 
 ```bash
-tail -f /var/log/scottbott.log
+sudo tail -f /var/log/scottbott.log
 ```
 
 ### 5. Updating the bot later
 
-On your local machine:
+**Push from your local machine:**
 
 ```bash
 git add .
@@ -182,19 +212,26 @@ git commit -m "your change"
 git push
 ```
 
-On the Oracle VM:
+**Deploy on the server** (backs up `scott_memory.db`, pulls code, restarts, verifies):
 
 ```bash
 ssh ubuntu@<your-vm-ip>
 cd scottbott
-git pull
-sudo systemctl restart scottbott
+bash scripts/deploy.sh
 ```
+
+The script:
+1. Backs up `scott_memory.db` to `backups/scott_memory.db.<timestamp>`
+2. Runs `git pull`
+3. Restarts the systemd service
+4. Waits and checks the service is actually active
+
+If the deploy fails, your DB backup is in `~/scottbott/backups/`.
 
 ## Troubleshooting
 
 - **`!scott song` returns "no audio and no text"** — Lyria 3 requires billing enabled on your Google Cloud project. The other features work without billing.
-- **Bot says "I cannot generate explicit or inappropriate images"** — keyword filter in the image command. Edit the `explicit_keywords` list in `scottbott.py` if you want to adjust.
+- **Bot says "I cannot generate explicit or inappropriate images"** — keyword filter in the image command. Edit the `_NSFW_TAGS` set in `commands/scott.py` if you want to adjust.
 - **Bot doesn't respond when @-mentioned** — make sure you enabled the *Message Content* intent in the Discord developer portal AND the bot has permission to read the channel.
 
 ## License
