@@ -11,27 +11,30 @@ except ImportError:
     print("Warning: ddgs package not installed. Web search functionality will be disabled.")
 
 
+GREETINGS = {
+    "hi", "hello", "hey", "thanks", "thank you", "lol", "ok",
+    "okay", "yes", "no", "sure", "cool", "nice", "haha", "bye",
+}
+
+SEARCH_SIGNALS = [
+    "?", "what", "who", "when", "where", "how", "why",
+    "latest", "news", "price", "weather", "score",
+]
+
+
 def _needs_search(text: str) -> bool:
     """Return True if the message should trigger a web search."""
     if not text:
         return False
-    stripped = text.strip()
-    lowered = stripped.lower()
-    if stripped.startswith('!'):
+    # Strip Discord mentions, emojis, collapse whitespace
+    clean = re.sub(r"<@!?\d+>", "", text).strip().lower()
+    if not clean or clean in GREETINGS:
         return False
-    no_search_patterns = [
-        r'^!scott',
-        r'^remember\s+',
-        r'^forget\s+',
-        r'^facts\s+',
-        r'^imagine\s+',
-        r'^analyze\s+this\s+file',
-        r'^read\s+this\s+file',
-    ]
-    for pattern in no_search_patterns:
-        if re.search(pattern, lowered):
-            return False
-    return True
+    if len(clean.split()) <= 3 and "?" not in clean:
+        return False
+    if any(signal in clean for signal in SEARCH_SIGNALS):
+        return True
+    return False
 
 
 async def web_search(query: str, num_results: int = 5) -> str:
