@@ -9,7 +9,9 @@ from config import (
     NIM_API_KEY,
     NIM_BASE_URL,
     NIM_MODEL,
-    NIM_TIMEOUT,
+    NIM_MODEL_COMPLEX,
+    NIM_TIMEOUT_SIMPLE,
+    NIM_TIMEOUT_COMPLEX,
     NIM_REASONING_EFFORT,
     NIM_MAX_TOKENS,
     NIM_TOP_P,
@@ -19,13 +21,27 @@ from config import (
     GEMINI_MAX_DELAY,
 )
 
+COMPLEX_TRIGGERS = [
+    # Coding
+    "code", "debug", "fix this", "write a function", "script", "error",
+    "traceback", "implement", "refactor", "class", "def ", "import",
+    # Deep thinking
+    "analyse", "analyze", "explain in detail", "compare", "essay",
+    "summarise", "summarize", "translate", "review", "architecture",
+    "design", "how does", "why does", "pros and cons", "difference between"
+]
+
+def needs_strong_model(message: str) -> bool:
+    lowered = message.lower()
+    return any(trigger in lowered for trigger in COMPLEX_TRIGGERS)
+
 client = genai.Client(api_key=GOOGLE_API_KEY, http_options={'api_version': 'v1alpha'})
 
-# NVIDIA NIM OpenAI-compatible client
+# NVIDIA NIM OpenAI-compatible client (timeout will be set dynamically)
 nim_client = AsyncOpenAI(
     base_url=NIM_BASE_URL,
     api_key=NIM_API_KEY,
-    timeout=NIM_TIMEOUT,
+    timeout=NIM_TIMEOUT_SIMPLE,
 )
 
 
@@ -123,10 +139,20 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
 
     messages.append({"role": "user", "content": user_message})
 
-    # Fallback chain: primary -> mistral -> gemini
-    models_to_try = [NIM_MODEL, "mistralai/mistral-small-4-119b-2603"]
+    # Determine if complex model is needed
+    is_complex = needs_strong_model(user_message)
 
-    for model in models_to_try:
+    if is_complex:
+        # Complex query: Kimi-k2.6 (90s) -> Mistral Small (30s) -> Gemini
+        models_to_try = [(NIM_MODEL_COMPLEX, NIM_TIMEOUT_COMPLEX), (NIM_MODEL, NIM_TIMEOUT_SIMPLE)]
+    else:
+        # Simple query: Mistral Small (30s) -> Gemini
+        models_to_try = [(NIM_MODEL, NIM_TIMEOUT_SIMPLE)]
+
+    for model, timeout in models_to_try:
+        # Update client timeout dynamically
+        nim_client.timeout = timeout
+
         kwargs = {
             "model": model,
             "messages": messages,
@@ -135,14 +161,14 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
             "max_tokens": NIM_MAX_TOKENS,
             "stream": False,
         }
-        if NIM_REASONING_EFFORT and model == NIM_MODEL:
+        if NIM_REASONING_EFFORT and model == NIM_MODEL_COMPLEX:
             kwargs["reasoning_effort"] = NIM_REASONING_EFFORT
 
         try:
             start = time.time()
             completion = await nim_client.chat.completions.create(**kwargs)
             elapsed = time.time() - start
-            print(f"[NIM] {model} response time: {elapsed:.2f}s")
+            print(f"[NIM] {model} (timeout={timeout}s) response time: {elapsed:.2f}s")
             return completion.choices[0].message.content
         except BadRequestError as e:
             body = str(e)
