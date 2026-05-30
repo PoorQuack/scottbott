@@ -32,6 +32,7 @@ conversation_mgr = PersistentConversationManager(
 
 def resolve_member_query(guild, query: str):
     """Resolve a member query to find matching guild members."""
+    print(f"[WARNING] resolve_member_query called with query: '{query}' - this may cause performance issues if called on every message")
     if not guild:
         return None
     query_clean = query.lower().strip().lstrip("@")
