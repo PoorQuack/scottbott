@@ -141,6 +141,11 @@ def add_user_fact(user_id: int, fact: str, guild_id: int = None, category: str =
 def get_user_facts(user_id: int, guild_id: int = None, limit: int = 10, include_all_guilds: bool = False):
     """Retrieve facts about a user. Returns (fact, category, user_name).
 
+    Only personal facts are injected by default. Contextual facts expire
+    after 14 days; session facts expire after 2 days. This keeps the
+    memory context fresh and prevents stale incidental remarks from leaking
+    into unrelated conversations.
+
     Args:
         user_id: The user to retrieve facts for
         guild_id: Guild context (None for global/DM context)
@@ -148,25 +153,33 @@ def get_user_facts(user_id: int, guild_id: int = None, limit: int = 10, include_
         include_all_guilds: If True and guild_id is None, return facts from all guilds.
                            If False (default), guild_id=None only returns global facts.
     """
+    category_filter = (
+        "(category = 'personal' "
+        "OR (category = 'contextual' AND updated_at >= datetime('now', '-14 days')) "
+        "OR (category = 'session' AND updated_at >= datetime('now', '-2 days')))"
+    )
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     if guild_id:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT fact, category, user_name FROM user_facts
             WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
+              AND {category_filter}
             ORDER BY updated_at DESC LIMIT ?
         ''', (user_id, guild_id, limit))
     elif include_all_guilds:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT fact, category, user_name FROM user_facts
             WHERE user_id = ?
+              AND {category_filter}
             ORDER BY updated_at DESC LIMIT ?
         ''', (user_id, limit))
     else:
         # DMs / global: only return global facts to prevent cross-guild leaks
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT fact, category, user_name FROM user_facts
             WHERE user_id = ? AND guild_id IS NULL
+              AND {category_filter}
             ORDER BY updated_at DESC LIMIT ?
         ''', (user_id, limit))
     facts = cursor.fetchall()
@@ -348,32 +361,58 @@ def build_memory_context(user_id: int = None, guild_id: int = None):
     Only includes facts and memories belonging to the CURRENT user. This is
     important because the AI uses these to know who it's talking to; leaking
     another user's 'remember me as X' makes it call everyone X.
+
+    Output is hard-limited to ~800 chars (~200 tokens). Oldest items are
+    dropped first when the budget is exceeded, so only the most recently
+    updated facts/memories survive.
     """
+    # Rough token budget: ~4 chars per English token.
+    _MEMORY_BUDGET = 800
+
     context_parts = []
+    used = 0
+
+    def _add(line: str, force: bool = False) -> bool:
+        nonlocal used
+        cost = len(line) + 1  # +1 for newline
+        if not force and used + cost > _MEMORY_BUDGET:
+            return False
+        context_parts.append(line)
+        used += cost
+        return True
 
     if user_id:
         facts = get_user_facts(user_id, guild_id)
         if facts:
             first_user_name = facts[0][2] if facts[0][2] else f"User {user_id}"
-            context_parts.append(
+            header = (
                 f"Facts about the CURRENT user ({first_user_name}, ID {user_id}). "
                 f"These apply ONLY to this user, not to anyone else:"
             )
+            _add(header, force=True)
             for fact, category, _user_name in facts:
-                context_parts.append(f"  - [{category}] {fact}")
+                line = f"  - [{category}] {fact}"
+                if not _add(line):
+                    break
 
     if user_id:
         memories = _get_recent_memories(guild_id=guild_id, user_id=user_id)
         if memories:
-            context_parts.append("\nThings the CURRENT user has asked you to remember:")
+            _add("\nThings the CURRENT user has asked you to remember:", force=True)
             for content, _mem_user_id, _mem_user_name in memories:
-                context_parts.append(f"  - {content}")
+                line = f"  - {content}"
+                if not _add(line):
+                    break
 
     if user_id:
         notes = get_user_notes(user_id, guild_id)
         if notes:
-            context_parts.append("\nUser's personal notes (they wrote these themselves for you to know):")
-            context_parts.append(notes)
+            notes_header = "\nUser's personal notes:"
+            # Reserve space for header + truncated notes
+            available = _MEMORY_BUDGET - used - len(notes_header) - 1
+            if available > 20:
+                _add(notes_header, force=True)
+                _add(notes[:min(len(notes), available)], force=True)
 
     return "\n".join(context_parts) if context_parts else ""
 

@@ -154,20 +154,28 @@ async def _maybe_extract_fact(message) -> bool:
             return False
 
     fact_text = content
+    category = "contextual"
     name_match = re.search(r'\bmy\s+name\s+is\s+([\w\s]+?)(?:\.|,|;|$|\band\b)', content_lower)
     if name_match:
         fact_text = f"My name is {name_match.group(1).strip().title()}"
+        category = "personal"
 
     preference_match = re.search(r'\b(i\s+(?:like|love|enjoy|hate|prefer))\s+(.+?)(?:\.|,|;|$|\band\b|\bbut\b)', content_lower)
     if preference_match:
         fact_text = f"{preference_match.group(1).capitalize()} {preference_match.group(2).strip()}"
+        category = "personal"
+
+    # All quality-pattern matches are identity/preference markers — personal.
+    # If no specific matcher fired, fall back to the pattern that triggered.
+    if category == "contextual":
+        category = "personal"
 
     add_user_fact(
         user_id=user_id,
         user_name=message.author.display_name,
         fact=fact_text,
         guild_id=message.guild.id if message.guild else None,
-        category="auto_extracted"
+        category=category,
     )
 
     user_history.append((now, content_hash))
