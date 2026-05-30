@@ -29,6 +29,38 @@ SEARCH_SIGNALS = [
     "search for", "look up", "find me", "current", "today"
 ]
 
+def sanitize_model_output(text: str) -> str:
+    """Strip any input scaffolding the model may have echoed back.
+
+    Removes leaked SPEAKER CONTEXT blocks, [Name] (ID:123): prefixes,
+    and [Reply context ...] lines so they never reach the channel.
+    """
+    if not text:
+        return text
+
+    # Remove a full --- SPEAKER CONTEXT --- ... --- END SPEAKER CONTEXT --- block
+    text = re.sub(
+        r"-{2,}\s*SPEAKER CONTEXT\s*-{2,}.*?-{2,}\s*END SPEAKER CONTEXT\s*-{2,}",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Remove any dangling SPEAKER CONTEXT key=value lines if the block was partial
+    text = re.sub(
+        r"^\s*(ACTIVE_USER_ID|ACTIVE_USERNAME|REPLY_ONLY_TO|IGNORE_OTHER_NAMES|"
+        r"REPLIED_TO_USER_ID|REPLIED_TO_USERNAME)\s*=.*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    # Remove echoed [Reply context — ...] lines
+    text = re.sub(r"^\s*\[Reply context.*?\]\s*$", "", text, flags=re.MULTILINE)
+    # Remove an echoed leading speaker prefix like "[Name] (ID:123): "
+    text = re.sub(r"^\s*\[[^\]]+\]\s*\(ID:\d+\):\s*", "", text)
+
+    return text.strip()
+
+
 def needs_search(text: str) -> bool:
     if not text:
         return False
@@ -279,6 +311,9 @@ async def on_message(message):
                             "The AI service might be temporarily unavailable."
                         )
                         return
+
+            # Strip any input scaffolding the model echoed back before storing/sending.
+            model_text = sanitize_model_output(model_text)
 
             model_content = types.Content(role="model", parts=[types.Part(text=model_text)])
             await conversation_mgr.append_message(channel_id, model_content, user_id=None, user_name=None)
