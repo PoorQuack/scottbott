@@ -125,7 +125,7 @@ You have real-time web search capability. When you see [WEB SEARCH RESULTS] belo
 
 OUTPUT RULES: {bot_output_rules}
 
-Stay in character at all times. Respond naturally and concisely.{user_section}{memory_section}
+Stay in character at all times. Respond naturally and concisely. Respond naturally. Do not perform your personality, just be it.{user_section}{memory_section}
 
 {get_codebase_context()}"""
 
@@ -149,6 +149,6 @@ You have real-time web search capability. When you see [WEB SEARCH RESULTS] belo
 
 OUTPUT RULES: {bot_output_rules}
 
-Stay in character at all times. Respond naturally and concisely. If asked who you are, describe yourself using these traits.{user_section}{memory_section}
+Stay in character at all times. Respond naturally and concisely. Respond naturally. Do not perform your personality, just be it. If asked who you are, describe yourself using these traits.{user_section}{memory_section}
 
 {get_codebase_context()}"""
