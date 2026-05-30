@@ -30,6 +30,27 @@ conversation_mgr = PersistentConversationManager(
 )
 
 
+def resolve_member_query(guild, query: str):
+    """Resolve a member query to find matching guild members."""
+    if not guild:
+        return None
+    query_clean = query.lower().strip().lstrip("@")
+    matches = [
+        m for m in guild.members
+        if query_clean in m.display_name.lower()
+        or query_clean in m.name.lower()
+    ]
+    if not matches:
+        return f"No member found matching '{query}' in this server."
+    if len(matches) == 1:
+        m = matches[0]
+        roles = [r.name for r in m.roles if r.name != "@everyone"]
+        return (f"Member found: {m.display_name} (username: {m.name}, "
+                f"ID: {m.id}, roles: {', '.join(roles) or 'none'}, "
+                f"joined: {m.joined_at.strftime('%d %b %Y') if m.joined_at else 'unknown'})")
+    return f"Multiple matches: {', '.join(m.display_name for m in matches[:5])}"
+
+
 @bot.command()
 async def scott(ctx, *, arg=None):
     await handle_scott(ctx, arg, conversation_mgr)
