@@ -219,8 +219,6 @@ async def on_message(message):
                 if user_message_text
                 else f"[{user_name}] (ID:{message.author.id}): "
             )
-            chat_user_message += "\n" + speaker_block
-
             search_context = ""
             if needs_search(user_message_text):
                 search_query = user_message_text[:200]
@@ -228,7 +226,7 @@ async def on_message(message):
                 if search_context:
                     print("[DEBUG] Injecting web search results into context")
 
-            augmented_system = system_prompt
+            augmented_system = system_prompt + "\n\n" + speaker_block
             if search_context:
                 augmented_system += (
                     "\n\n[WEB SEARCH RESULTS — these are LIVE results fetched right now. "
