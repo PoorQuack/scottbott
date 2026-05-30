@@ -232,14 +232,14 @@ async def on_message(message):
             if fact_extracted:
                 print(f"[FACT] Auto-extracted fact from {message.author.display_name}")
 
-            if model_text.startswith("[FILE:"):
-                end_bracket = model_text.index("]")
-                filename = model_text[6:end_bracket].strip()
-                file_content = model_text[end_bracket + 1:].lstrip("\n")
-                file_bytes = io.BytesIO(file_content.encode("utf-8"))
-                await message.reply(file=discord.File(file_bytes, filename=filename))
+            if len(model_text) > 2000:
+                file_bytes = io.BytesIO(model_text.encode("utf-8"))
+                await message.reply(
+                    "Response was too long — here's a file:",
+                    file=discord.File(file_bytes, filename="response.txt")
+                )
             else:
-                await message.reply(model_text[:2000])
+                await message.reply(model_text)
 
         except Exception as e:
             print(f"Chat Error: {type(e).__name__}: {e}")
