@@ -22,13 +22,14 @@ from config import (
 )
 
 COMPLEX_TRIGGERS = [
-    # Coding
-    "code", "debug", "fix this", "write a function", "script", "error",
-    "traceback", "implement", "refactor", "class", "def ", "import",
-    # Deep thinking
-    "analyse", "analyze", "explain in detail", "compare", "essay",
-    "summarise", "summarize", "translate", "review", "architecture",
-    "design", "how does", "why does", "pros and cons", "difference between"
+    # Coding - more specific patterns
+    "write a function", "debug this", "fix this code", "implement", "refactor",
+    "traceback", "class definition", "def function", "import error",
+    "syntax error", "runtime error", "help me code", "coding help",
+    # Deep analysis - more specific patterns
+    "explain in detail", "compare and contrast", "write an essay",
+    "technical analysis", "system architecture", "code review",
+    "algorithm design", "data structure", "database schema"
 ]
 
 def needs_strong_model(message: str) -> bool:
