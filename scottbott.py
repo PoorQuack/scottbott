@@ -1,4 +1,5 @@
 import io
+import re
 import traceback
 import discord
 from discord.ext import commands
@@ -114,23 +115,40 @@ async def on_message(message):
                     continue
                 for part in msg.parts:
                     text = getattr(part, 'text', '') or ''
-                    if text.startswith('['):
-                        end = text.find(']: ')
-                        if end != -1:
-                            name = text[1:end]
-                            if name and name != user_name:
-                                _other_names.add(name)
+                    if not text.startswith('['):
+                        continue
+                    # Handle old format [Name]: and new format [Name] (ID:123):
+                    end = text.find(']: ')
+                    if end != -1:
+                        name = text[1:end]
+                    else:
+                        close = text.find(']')
+                        if close != -1 and text.find('] (ID:', close) == close:
+                            name = text[1:close]
+                        else:
+                            continue
+                    if name and name != user_name:
+                        _other_names.add(name)
             ignore_names = ', '.join(sorted(_other_names)) if _other_names else 'none'
 
             # Structured speaker metadata block — hard metadata the model cannot miss.
-            speaker_block = (
-                "--- SPEAKER CONTEXT ---\n"
-                f"ACTIVE_USER_ID={message.author.id}\n"
-                f"ACTIVE_USERNAME={user_name}\n"
-                f"REPLY_ONLY_TO={user_name}\n"
-                f"IGNORE_OTHER_NAMES={ignore_names}\n"
-                "--- END SPEAKER CONTEXT ---\n"
-            )
+            # Placed at the very end of context, right before the latest user turn.
+            speaker_lines = [
+                "--- SPEAKER CONTEXT ---",
+                f"ACTIVE_USER_ID={message.author.id}",
+                f"ACTIVE_USERNAME={user_name}",
+                f"REPLY_ONLY_TO={user_name}",
+                f"IGNORE_OTHER_NAMES={ignore_names}",
+            ]
+            if replied_to_message and replied_to_message.author.id != message.author.id:
+                speaker_lines.append(
+                    f"REPLIED_TO_USER_ID={replied_to_message.author.id}"
+                )
+                speaker_lines.append(
+                    f"REPLIED_TO_USERNAME={replied_to_message.author.display_name}"
+                )
+            speaker_lines.append("--- END SPEAKER CONTEXT ---")
+            speaker_block = "\n".join(speaker_lines) + "\n"
 
             chat_user_message = ""
             if replied_to_message and replied_to_message.content:
@@ -139,12 +157,12 @@ async def on_message(message):
                     f"[Reply context — replying to message by {reply_author}: "
                     f'"{replied_to_message.content}"]\n'
                 )
-            chat_user_message += speaker_block
             chat_user_message += (
-                f"[{user_name}]: {user_message_text}"
+                f"[{user_name}] (ID:{message.author.id}): {user_message_text}"
                 if user_message_text
-                else f"[{user_name}]: "
+                else f"[{user_name}] (ID:{message.author.id}): "
             )
+            chat_user_message += "\n" + speaker_block
 
             search_context = ""
             if _needs_search(user_message_text):
@@ -174,6 +192,38 @@ async def on_message(message):
                     "The AI service might be temporarily unavailable."
                 )
                 return
+
+            # One-pass validator: if the reply names a wrong recent user, rerun once.
+            if _other_names:
+                lower_response = model_text.lower()
+                wrong_used = set()
+                for wrong_name in _other_names:
+                    pattern = r'(?<!\w)' + re.escape(wrong_name.lower()) + r'(?!\w)'
+                    if re.search(pattern, lower_response):
+                        wrong_used.add(wrong_name)
+                if wrong_used:
+                    print(
+                        f"[VALIDATOR] Response used wrong name(s): {wrong_used}. "
+                        f"Rerunning with correction instruction."
+                    )
+                    correction = (
+                        "\n\n[CRITICAL CORRECTION — previous response was wrong]\n"
+                        f"You addressed the wrong user. You MUST ONLY reply to "
+                        f"{user_name} (ID:{message.author.id}). "
+                        f"Never mention or address: {', '.join(sorted(wrong_used))}. "
+                        "Regenerate your response correctly."
+                    )
+                    model_text = await generate_chat_with_nim(
+                        system_prompt=augmented_system + correction,
+                        user_message=chat_user_message,
+                        conversation_history=focused_history,
+                    )
+                    if model_text is None:
+                        await message.reply(
+                            "❌ Sorry, I couldn't generate a response. "
+                            "The AI service might be temporarily unavailable."
+                        )
+                        return
 
             model_content = types.Content(role="model", parts=[types.Part(text=model_text)])
             await conversation_mgr.append_message(channel_id, model_content, user_id=None, user_name=None)

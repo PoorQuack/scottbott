@@ -10,7 +10,7 @@ DB_FILE = "scott_memory.db"
 
 class MessageWithMeta:
     """Wrapper for Content that includes user metadata.
-    Defined here to avoid circular imports with scottbott.py"""
+    Defined here to avoid circular imports between modules."""
 
     def __init__(self, content, user_id: int = None, user_name: str = None):
         self.content = content
@@ -412,7 +412,9 @@ def save_channel_messages(channel_id: int, messages: list):
             raw_content = "\n".join(text_parts) if text_parts else ""
 
             # Prefix user attribution into stored content for context
-            if role == 'user' and user_name:
+            if role == 'user' and user_name and user_id:
+                content = f"[{user_name}] (ID:{user_id}): {raw_content}"
+            elif role == 'user' and user_name:
                 content = f"[{user_name}]: {raw_content}"
             else:
                 content = raw_content
@@ -449,10 +451,17 @@ def load_channel_messages(channel_id: int, limit: int = 50):
 
             user_name = db_user_name
             if not user_name and role == 'user' and content.startswith('['):
+                # Parse both old format [Name]: and new format [Name] (ID:123):
                 end_bracket = content.find(']: ')
                 if end_bracket != -1:
-                    user_name = content[1:end_bracket]
-            # Preserve full content including the [Username]: prefix
+                    name_part = content[1:end_bracket]
+                    # Strip the ID suffix if present: "Name] (ID:123"
+                    id_start = name_part.rfind('] (ID:')
+                    if id_start != -1:
+                        user_name = name_part[:id_start]
+                    else:
+                        user_name = name_part
+            # Preserve full content including the [Username] (ID:...) prefix
             # so downstream models can identify who said what.
 
             parts = [types.Part(text=content)]
