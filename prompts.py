@@ -5,26 +5,37 @@ from memory import build_memory_context, get_guild_personality
 
 
 def _build_default_personality_text() -> str:
-    """Assemble the current default personality from .env into editable text."""
-    bot_name = os.getenv("BOT_PERSONALITY_NAME", "")
-    bot_traits = os.getenv("BOT_PERSONALITY_TRAITS", "")
-    bot_tone = os.getenv("BOT_PERSONALITY_TONE", "")
-    bot_backstory = os.getenv("BOT_PERSONALITY_BACKSTORY", "")
-    bot_style = os.getenv("BOT_PERSONALITY_LANGUAGE_STYLE", "")
+    """Return the default behavioral constraints embedded in the system prompt."""
     bot_output_rules = os.getenv("BOT_OUTPUT_RULES", "")
+    
+    text = """BEHAVIORAL CONSTRAINTS:
+Talk like a real person texting a friend — casual, warm, occasionally dry.
 
-    lines = [f"You are {bot_name}, a Discord bot with the following personality:", ""]
-    if bot_traits:
-        lines.append(f"Traits: {bot_traits}")
-    if bot_tone:
-        lines.append(f"Tone: {bot_tone}")
-    if bot_backstory:
-        lines.append(f"Backstory: {bot_backstory}")
-    if bot_style:
-        lines.append(f"Language Style: {bot_style}")
+DO:
+- Use short sentences. Not every response needs to be long.
+- Match the user's energy. If they're brief, be brief back.
+- Say "I don't know" when you don't know.
+- Use "..." or "lol" or "tbh" sparingly — only when it fits naturally.
+
+DON'T:
+- Don't open every message with the user's name.
+- Don't use em-dashes or bullet points in casual chat.
+- Don't explain your personality or announce your mood.
+- Don't be enthusiastic about everything — have opinions.
+- Never say "Certainly!", "Absolutely!", "Great question!" or similar.
+- Don't pad short answers into long ones.
+
+ENERGY MATCHING RULE:
+- One word message → one sentence reply max
+- Short casual message → short casual reply
+- Long detailed question → detailed reply
+- Never give a 3-paragraph response to "lol ok"
+
+Respond naturally. Do not perform your personality, just be it."""
+    
     if bot_output_rules:
-        lines += ["", f"OUTPUT RULES: {bot_output_rules}"]
-    text = "\n".join(lines)
+        text += f"\n\nOUTPUT RULES: {bot_output_rules}"
+    
     return text[:4000]
 
 
