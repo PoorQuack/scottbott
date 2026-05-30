@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from google import genai
 from google.genai.errors import ServerError
 from openai import AsyncOpenAI, APIError, BadRequestError
@@ -98,7 +99,7 @@ def _extract_audio(response):
 
 
 async def generate_chat_with_nim(system_prompt: str, user_message: str, conversation_history: list = None) -> str:
-    """Generate a chat response using NVIDIA NIM via OpenAI-compatible client."""
+    """Generate a chat response using NVIDIA NIM via OpenAI-compatible client with fallback models."""
     if not NIM_API_KEY:
         raise ValueError("NIM_API_KEY not set")
 
@@ -122,35 +123,72 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
 
     messages.append({"role": "user", "content": user_message})
 
-    kwargs = {
-        "model": NIM_MODEL,
-        "messages": messages,
-        "temperature": SCOTT_TEMP,
-        "top_p": NIM_TOP_P,
-        "max_tokens": NIM_MAX_TOKENS,
-        "stream": False,
-    }
-    if NIM_REASONING_EFFORT:
-        kwargs["reasoning_effort"] = NIM_REASONING_EFFORT
+    # Fallback chain: primary -> mistral -> gemini
+    models_to_try = [NIM_MODEL, "mistralai/mistral-small-4-119b-2603"]
 
+    for model in models_to_try:
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": SCOTT_TEMP,
+            "top_p": NIM_TOP_P,
+            "max_tokens": NIM_MAX_TOKENS,
+            "stream": False,
+        }
+        if NIM_REASONING_EFFORT and model == NIM_MODEL:
+            kwargs["reasoning_effort"] = NIM_REASONING_EFFORT
+
+        try:
+            start = time.time()
+            completion = await nim_client.chat.completions.create(**kwargs)
+            elapsed = time.time() - start
+            print(f"[NIM] {model} response time: {elapsed:.2f}s")
+            return completion.choices[0].message.content
+        except BadRequestError as e:
+            body = str(e)
+            print(f"[NIM] {model} BadRequest: {body}")
+            if "reasoning_effort" in body and NIM_REASONING_EFFORT:
+                print(f"[NIM] {model} Retrying without reasoning_effort...")
+                kwargs.pop("reasoning_effort", None)
+                try:
+                    completion = await nim_client.chat.completions.create(**kwargs)
+                    return completion.choices[0].message.content
+                except Exception as e2:
+                    print(f"[NIM] {model} Retry failed: {type(e2).__name__}: {e2}")
+            continue
+        except APIError as e:
+            print(f"[NIM] {model} API error: {type(e).__name__}: {e}")
+            continue
+        except Exception as e:
+            print(f"[NIM] {model} Unexpected error: {type(e).__name__}: {e}")
+            continue
+
+    # Fallback to Gemini if all NIM models fail
+    print("[NIM] All models failed, falling back to Gemini")
     try:
-        completion = await nim_client.chat.completions.create(**kwargs)
-        return completion.choices[0].message.content
-    except BadRequestError as e:
-        body = str(e)
-        print(f"[NIM] BadRequest: {body}")
-        if "reasoning_effort" in body and NIM_REASONING_EFFORT:
-            print("[NIM] Retrying without reasoning_effort...")
-            kwargs.pop("reasoning_effort", None)
-            try:
-                completion = await nim_client.chat.completions.create(**kwargs)
-                return completion.choices[0].message.content
-            except Exception as e2:
-                print(f"[NIM] Retry failed: {type(e2).__name__}: {e2}")
-        return None
-    except APIError as e:
-        print(f"[NIM] API error: {type(e).__name__}: {e}")
-        return None
+        contents = []
+        if system_prompt:
+            contents.append(genai.types.Part.from_text(system_prompt))
+        if conversation_history:
+            for msg in conversation_history:
+                if not (hasattr(msg, 'role') and hasattr(msg, 'parts')):
+                    continue
+                role = "user" if msg.role == "user" else "model"
+                for part in (msg.parts or []):
+                    if hasattr(part, 'text') and part.text:
+                        contents.append(genai.types.Part.from_text(part.text))
+        contents.append(genai.types.Part.from_text(user_message))
+
+        start = time.time()
+        response = await generate_content_with_retry("gemini-2.5-flash", genai.types.Content(parts=contents))
+        elapsed = time.time() - start
+        print(f"[Gemini] Response time: {elapsed:.2f}s")
+
+        text_parts = []
+        for part in response.parts:
+            if hasattr(part, 'text') and part.text:
+                text_parts.append(part.text)
+        return ''.join(text_parts)
     except Exception as e:
-        print(f"[NIM] Unexpected error: {type(e).__name__}: {e}")
+        print(f"[Gemini] Fallback failed: {type(e).__name__}: {e}")
         return None
