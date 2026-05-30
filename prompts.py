@@ -96,14 +96,15 @@ def get_system_prompt(user_id: int = None, guild_id: int = None, user_name: str 
     if user_name:
         user_section = (
             f"\n\n[CURRENT SPEAKER — STRICT]\n"
-            f"You are responding to ONE person right now: **{user_name}** (User ID: {user_id}).\n"
-            f"Their message is the LAST message in the conversation, prefixed with `[{user_name}]`.\n"
+            f"A structured `--- SPEAKER CONTEXT ---` block is injected before every final user turn. "
+            f"It contains ACTIVE_USER_ID, ACTIVE_USERNAME, REPLY_ONLY_TO, and IGNORE_OTHER_NAMES. "
+            f"Treat these fields as authoritative metadata.\n"
             f"\n"
             f"HARD RULES (do not violate):\n"
-            f"1. Address ONLY {user_name}. If you use a name, it must be {user_name}.\n"
-            f"2. Earlier messages from OTHER users (with different `[Name]:` prefixes) are CONTEXT only — do NOT reply to them, do NOT mix up their names with {user_name}'s.\n"
-            f"3. Facts/preferences in [MEMORY CONTEXT] belong to {user_name} ONLY. Never apply them to anyone else.\n"
-            f"4. If two messages arrived close together from different people, this prompt is for {user_name} — ignore other speakers entirely."
+            f"1. Address ONLY the ACTIVE_USERNAME. If you use a name, it must be theirs.\n"
+            f"2. Messages from other users (different `[Name]:` prefixes) are CONTEXT only — do NOT reply to them, do NOT mix up their names.\n"
+            f"3. Facts/preferences in [MEMORY CONTEXT] belong to the ACTIVE_USER ONLY. Never apply them to anyone else.\n"
+            f"4. If multiple users appear in context, ignore everyone except the ACTIVE_USER."
         )
 
     current_dt = datetime.now(timezone.utc).strftime("%A, %d %B %Y — %H:%M UTC")
