@@ -31,10 +31,18 @@ def _check_rate_limit(user_id: int) -> tuple[bool, str]:
     return True, ""
 
 
+def _normalise_text(text: str) -> str:
+    """Normalise text to defeat obfuscation techniques like spacing, unicode lookalikes, etc."""
+    text = text.lower()
+    text = re.sub(r'[\s\-_.,!@#$%^&*]+', '', text)  # strip spacing/punctuation
+    text = text.replace('0', 'o').replace('1', 'i').replace('3', 'e').replace('@', 'a')
+    return text
+
+
 def _scan_content(text_content: str) -> tuple[bool, str]:
-    content_lower = text_content.lower()
+    content_normalised = _normalise_text(text_content)
     for pattern in SUSPICIOUS_PATTERNS:
-        if re.search(pattern, content_lower, re.IGNORECASE):
+        if re.search(pattern, content_normalised, re.IGNORECASE):
             return False, f"Content contains potentially malicious pattern: '{pattern[:50]}...'"
     return True, ""
 
