@@ -177,7 +177,10 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
                 print(f"[NIM] {model} Retrying without reasoning_effort...")
                 kwargs.pop("reasoning_effort", None)
                 try:
+                    start = time.time()
                     completion = await nim_client.chat.completions.create(**kwargs)
+                    elapsed = time.time() - start
+                    print(f"[NIM] {model} (retry without reasoning_effort) response time: {elapsed:.2f}s")
                     return completion.choices[0].message.content
                 except Exception as e2:
                     print(f"[NIM] {model} Retry failed: {type(e2).__name__}: {e2}")
