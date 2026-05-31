@@ -68,7 +68,11 @@ def sanitize_model_output(text: str) -> str:
     # Remove an echoed leading speaker prefix like "[Name] (ID:123): "
     text = re.sub(r"^\s*\[[^\]]+\]\s*\(ID:\d+\):\s*", "", text)
 
-    return text.strip()
+    sanitized = text.strip()
+    # If sanitization removed everything, return original to avoid empty message error
+    if not sanitized:
+        return text.strip()
+    return sanitized
 
 
 def needs_search(text: str) -> bool:
