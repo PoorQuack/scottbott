@@ -82,7 +82,7 @@ def _highpass(pcm16_mono: bytes, fc: float = 90.0, rate: int = _TARGET_RATE) -> 
 
 
 # Set to True to dump what Riva receives (writes debug_*.wav in the cwd).
-_DEBUG_DUMP = True
+_DEBUG_DUMP = False
 
 # Below this RMS the utterance is treated as silence (Whisper hallucinates
 # "Subtitles by the Amara.org community" etc. on near-silent input).
