@@ -27,7 +27,7 @@ fi
 # Pull latest code
 cd "$REPO_DIR"
 echo "⬇️  Pulling latest code..."
-git pull
+git pull origin main
 
 # Restart the service
 echo "🔄 Restarting $SERVICE_NAME..."
