@@ -9,7 +9,9 @@ from memory import (
     get_user_notes,
     get_guild_personality,
 )
-from services.images import expand_prompt_with_grok, generate_image
+from services.images import expand_prompt_with_grok, generate_image, generate_image_nvidia
+from services.ai import set_reasoning_mode, get_reasoning_mode
+from services.voice_session import join_voice, leave_voice, say_text
 from services.music import generate_song, format_song_error
 from prompts import _build_default_personality_text
 from ui import NotesEditView, PersonalityView
@@ -27,7 +29,13 @@ async def handle_scott(ctx, arg, conversation_mgr):
     if not arg:
         await ctx.send(
             "Scott is here. Try:\n"
-            "• `!scott imagine [prompt]` — generate an image\n"
+            "• `!scott imagine [prompt]` — generate an anime image\n"
+            "• `!scott aigen [prompt]` — generate an image with Stable Diffusion 3.5\n"
+            "• `!scott join` — join your voice channel and talk out loud\n"
+            "• `!scott leave` — leave the voice channel\n"
+            "• `!scott say [text]` — make the bot speak text out loud (TTS test)\n"
+            "• `!scott light` — faster, casual replies (low reasoning)\n"
+            "• `!scott heavy` — sharper coding/complex help (high reasoning)\n"
             "• `!scott song [prompt]` — generate a 30-second music clip (fast)\n"
             "• `!scott song long [prompt]` — generate a full song with vocals (slow)\n"
             "• `!scott remember [text]` — remember something\n"
@@ -39,7 +47,23 @@ async def handle_scott(ctx, arg, conversation_mgr):
         return
 
     arg_lower = arg.strip().lower()
-    if arg_lower.startswith("imagine "):
+    if arg_lower == "join":
+        await ctx.send(await join_voice(ctx.bot, ctx))
+    elif arg_lower == "leave":
+        await ctx.send(await leave_voice(ctx))
+    elif arg_lower.startswith("say "):
+        msg = await say_text(ctx, arg[4:].strip())
+        if msg:
+            await ctx.send(msg)
+    elif arg_lower == "light":
+        mode = set_reasoning_mode("low")
+        await ctx.send(f"⚡ Light mode — reasoning effort set to **{mode}**. Faster, more casual replies.")
+    elif arg_lower == "heavy":
+        mode = set_reasoning_mode("high")
+        await ctx.send(f"🧠 Heavy mode — reasoning effort set to **{mode}**. Slower but sharper for coding and complex stuff.")
+    elif arg_lower.startswith("aigen "):
+        await _handle_aigen(ctx, arg[6:].strip())
+    elif arg_lower.startswith("imagine "):
         await _handle_imagine(ctx, arg[8:])
     elif arg_lower.startswith("song"):
         await _handle_song(ctx, arg[4:].strip())
@@ -55,6 +79,31 @@ async def handle_scott(ctx, arg, conversation_mgr):
         await _handle_editpersonality(ctx, conversation_mgr)
     else:
         await ctx.send("Unknown command.")
+
+
+async def _handle_aigen(ctx, prompt):
+    """Generate an image via NVIDIA Stable Diffusion 3.5 Large."""
+    if not prompt:
+        await ctx.send("Usage: `!scott aigen [prompt]`")
+        return
+
+    is_explicit = bool({w.lower() for w in prompt.split()} & _NSFW_TAGS)
+    if is_explicit and not getattr(ctx.channel, "nsfw", False):
+        await ctx.reply("🔞 Explicit prompts can only be used in an Age-Restricted channel.")
+        return
+
+    notice = await ctx.send("🎨 Generating with Stable Diffusion 3.5...")
+    async with ctx.typing():
+        image_bytes = await generate_image_nvidia(prompt)
+
+    if image_bytes:
+        await ctx.reply(file=discord.File(io.BytesIO(image_bytes), filename="aigen.jpeg"))
+        try:
+            await notice.delete()
+        except Exception:
+            pass
+    else:
+        await notice.edit(content="Image generation failed — NVIDIA returned no image. Check the console log.")
 
 
 async def _handle_imagine(ctx, prompt):

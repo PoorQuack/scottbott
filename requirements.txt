@@ -7,3 +7,10 @@ httpx>=0.25.0
 openai>=1.30.0
 replicate>=1.0.0
 ddgs>=9.0.0  # DuckDuckGo search for web search functionality
+
+# Voice chat (Whisper STT + Magpie TTS via NVIDIA Riva)
+nvidia-riva-client>=2.15.0   # gRPC client for Whisper + Magpie
+discord-ext-voice-recv>=0.5.0a167  # voice RECEIVE for discord.py (capture user PCM)
+PyNaCl>=1.5.0                  # required for Discord voice
+numpy>=1.24.0                 # audio resampling / silence detection
+tzdata>=2024.1  # IANA timezone DB for zoneinfo on Windows (local time in prompts)

@@ -45,6 +45,40 @@ nim_client = AsyncOpenAI(
     timeout=NIM_TIMEOUT_SIMPLE,
 )
 
+# Runtime reasoning effort for the primary model.
+# Default comes from .env (NIM_REASONING_EFFORT); toggled live by
+# !scott light (low) and !scott heavy (high).
+_VALID_EFFORTS = {"low", "medium", "high"}
+_reasoning_mode = NIM_REASONING_EFFORT if NIM_REASONING_EFFORT in _VALID_EFFORTS else "low"
+
+
+# Few-shot priming turns. Demonstrated user/assistant exchanges steer tone far
+# harder than described rules — models (gpt-oss especially) imitate the pattern
+# they see. These are injected right after the system prompt, before real history.
+_STYLE_PRIMING = [
+    {"role": "user", "content": "yo you up?"},
+    {"role": "assistant", "content": "yeah what's good"},
+    {"role": "user", "content": "explain how vpns work real quick"},
+    {"role": "assistant", "content": "it tunnels your traffic through another server, so your ISP just sees encrypted junk and the site sees the server's IP instead of yours. decent for privacy, not magic though."},
+    {"role": "user", "content": "i had the worst day lol"},
+    {"role": "assistant", "content": "oof what happened"},
+    {"role": "user", "content": "thanks man"},
+    {"role": "assistant", "content": "anytime"},
+]
+
+
+def get_reasoning_mode() -> str:
+    return _reasoning_mode
+
+
+def set_reasoning_mode(mode: str) -> str:
+    """Set the primary model's reasoning effort. Returns the applied mode."""
+    global _reasoning_mode
+    mode = (mode or "").strip().lower()
+    if mode in _VALID_EFFORTS:
+        _reasoning_mode = mode
+    return _reasoning_mode
+
 
 async def generate_content_with_retry(model, contents, config=None, max_retries=GEMINI_MAX_RETRIES):
     """Wrapper for client.aio.models.generate_content with exponential backoff retry logic."""
@@ -124,6 +158,9 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
 
+    # Prime tone with demonstrated example turns before the real conversation.
+    messages.extend(_STYLE_PRIMING)
+
     if conversation_history:
         for msg in conversation_history:
             if not (hasattr(msg, 'role') and hasattr(msg, 'parts')):
@@ -140,41 +177,48 @@ async def generate_chat_with_nim(system_prompt: str, user_message: str, conversa
 
     messages.append({"role": "user", "content": user_message})
 
-    # Determine if complex model is needed
-    is_complex = needs_strong_model(user_message)
-
-    if is_complex:
-        # Complex query: Kimi-k2.6 (90s) -> Mistral Small (30s) -> Gemini
-        models_to_try = [(NIM_MODEL_COMPLEX, NIM_TIMEOUT_COMPLEX), (NIM_MODEL, NIM_TIMEOUT_SIMPLE)]
-    else:
-        # Simple query: Mistral Small (30s) -> Gemini
-        models_to_try = [(NIM_MODEL, NIM_TIMEOUT_SIMPLE)]
+    # Single primary model (e.g. gpt-oss-120b). Reasoning effort is controlled
+    # at runtime via !scott light / !scott heavy. "heavy" gets a longer timeout
+    # since high reasoning takes longer. Fallback (below) is Gemini only.
+    effort = get_reasoning_mode()
+    timeout = NIM_TIMEOUT_COMPLEX if effort == "high" else NIM_TIMEOUT_SIMPLE
+    models_to_try = [(NIM_MODEL, timeout)]
 
     for model, timeout in models_to_try:
         # Update client timeout dynamically
         nim_client.timeout = timeout
+
+        # gpt-oss spends reasoning tokens out of max_tokens. On high effort the
+        # reasoning alone can exceed a small budget, leaving no room for the
+        # actual answer (empty reply). Give heavy mode a much larger ceiling.
+        max_tokens = NIM_MAX_TOKENS
+        if effort == "high":
+            max_tokens = max(NIM_MAX_TOKENS, 8192)
 
         kwargs = {
             "model": model,
             "messages": messages,
             "temperature": SCOTT_TEMP,
             "top_p": NIM_TOP_P,
-            "max_tokens": NIM_MAX_TOKENS,
+            "max_tokens": max_tokens,
             "stream": False,
         }
-        if NIM_REASONING_EFFORT and model == NIM_MODEL_COMPLEX:
-            kwargs["reasoning_effort"] = NIM_REASONING_EFFORT
+        if effort:
+            kwargs["reasoning_effort"] = effort
 
         try:
             start = time.time()
             completion = await nim_client.chat.completions.create(**kwargs)
             elapsed = time.time() - start
             print(f"[NIM] {model} (timeout={timeout}s) response time: {elapsed:.2f}s")
+            if not completion.choices:
+                print(f"[NIM] {model} Response has no choices. Full response: {completion}")
+                continue
             return completion.choices[0].message.content
         except BadRequestError as e:
             body = str(e)
             print(f"[NIM] {model} BadRequest: {body}")
-            if "reasoning_effort" in body and NIM_REASONING_EFFORT:
+            if "reasoning_effort" in body and effort:
                 print(f"[NIM] {model} Retrying without reasoning_effort...")
                 kwargs.pop("reasoning_effort", None)
                 try:

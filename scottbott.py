@@ -1,4 +1,6 @@
+import asyncio
 import io
+import os
 import re
 import traceback
 import discord
@@ -24,9 +26,11 @@ NO_SEARCH_PHRASES = [
 ]
 
 SEARCH_SIGNALS = [
-    "?", "what is", "who is", "when did", "where is", "how does",
-    "latest", "news", "price", "weather", "score", "define",
-    "search for", "look up", "find me", "current", "today"
+    "search for", "look up", "look this up", "google", "find me",
+    "latest", "breaking news", "news about", "current price",
+    "weather in", "weather today", "stock price", "exchange rate",
+    "who won", "what year", "release date", "how much does",
+    "define ", "definition of",
 ]
 
 def sanitize_model_output(text: str) -> str:
@@ -63,10 +67,42 @@ def sanitize_model_output(text: str) -> str:
     # Remove a stray standalone [WEB SEARCH RESULTS] marker line
     text = re.sub(r"^\s*\[WEB SEARCH RESULTS.*?\]\s*$", "", text, flags=re.MULTILINE)
 
+    # Remove leaked model meta-notes, e.g.
+    #   [NOTE: The last user message seems to be a continuation: "..."]
+    # gpt-oss sometimes bleeds reasoning-style annotations into the reply.
+    text = re.sub(r"\[\s*NOTE\b.*?\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Catch other bracketed self-instructions that reference the user turn.
+    text = re.sub(
+        r"\[[^\]]*\b(respond accordingly|the last user message|"
+        r"the user'?s? (last )?message|continuation)\b[^\]]*\]",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     # Remove echoed [Reply context — ...] lines
     text = re.sub(r"^\s*\[Reply context.*?\]\s*$", "", text, flags=re.MULTILINE)
     # Remove an echoed leading speaker prefix like "[Name] (ID:123): "
     text = re.sub(r"^\s*\[[^\]]+\]\s*\(ID:\d+\):\s*", "", text)
+
+    # --- Stop few-shot format bleed: the model imitates the "User:/You:/---"
+    # priming layout and tacks on extra (often duplicate) turns. Cut at the
+    # first "---" separator line and drop any echoed You:/User: prefixes. ---
+    text = re.split(r"(?m)^\s*-{3,}\s*$", text)[0]
+    text = re.sub(r"(?im)^\s*(you|user|assistant)\s*:\s*", "", text)
+
+    # --- Formatting strip: no em/en dashes, no bold/italic, no blockquotes ---
+    # Models ignore "don't use em-dashes" in the prompt, so enforce it here.
+    # Em/en dashes -> ", " (reads naturally mid-sentence).
+    text = re.sub(r"\s*[—–]\s*", ", ", text)
+    # Bold: **x** / __x__ -> x   (do bold before italic)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    # Italic: *x* / _x_ -> x
+    text = re.sub(r"\*(.+?)\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", text, flags=re.DOTALL)
+    # Blockquotes: strip leading "> " on any line.
+    text = re.sub(r"^[ \t]*>[ \t]?", "", text, flags=re.MULTILINE)
 
     sanitized = text.strip()
     # If sanitization removed everything, return original to avoid empty message error
@@ -192,6 +228,19 @@ async def on_message(message):
                     storage_parts.append(types.Part(text="[image attachment]"))
             user_message_text = user_message_text.strip()
 
+            # Strip the bot's own @mention so a bare ping isn't treated as content.
+            if bot.user:
+                user_message_text = re.sub(
+                    rf"<@!?{bot.user.id}>", "", user_message_text
+                ).strip()
+
+            # Bare ping with no text and no image: treat as a friendly greeting
+            # instead of sending the model an empty turn (which produces the
+            # "you're not saying it directly" filler).
+            has_image = any(not isinstance(p, str) for p in content_parts)
+            if not user_message_text and not has_image:
+                user_message_text = "(The user pinged you with no message. Greet them warmly and ask how you can help.)"
+
             user_content = types.Content(role="user", parts=storage_parts)
             await conversation_mgr.append_message(
                 channel_id, user_content, user_id=message.author.id, user_name=user_name
@@ -266,7 +315,8 @@ async def on_message(message):
                 else f"[{user_name}] (ID:{message.author.id}): "
             )
             search_context = ""
-            if needs_search(user_message_text):
+            ENABLE_WEB_SEARCH = os.getenv("ENABLE_WEB_SEARCH", "false").lower() == "true"
+            if ENABLE_WEB_SEARCH and needs_search(user_message_text):
                 search_query = user_message_text[:200]
                 search_context = await web_search(search_query)
                 if search_context:
@@ -281,11 +331,19 @@ async def on_message(message):
                 )
 
             print(f"[DEBUG] Using NIM chat model: {NIM_MODEL}")
-            model_text = await generate_chat_with_nim(
-                system_prompt=augmented_system,
-                user_message=chat_user_message,
-                conversation_history=focused_history,
-            )
+            
+            # Retry up to 3 times if AI fails
+            model_text = None
+            for attempt in range(3):
+                model_text = await generate_chat_with_nim(
+                    system_prompt=augmented_system,
+                    user_message=chat_user_message,
+                    conversation_history=focused_history,
+                )
+                if model_text is not None:
+                    break
+                print(f"[RETRY] AI generation failed (attempt {attempt + 1}/3), retrying...")
+                await asyncio.sleep(1)  # brief delay before retry
 
             if model_text is None:
                 await message.reply(
@@ -314,11 +372,18 @@ async def on_message(message):
                         f"Never mention or address: {', '.join(sorted(wrong_used))}. "
                         "Regenerate your response correctly."
                     )
-                    model_text = await generate_chat_with_nim(
-                        system_prompt=augmented_system + correction,
-                        user_message=chat_user_message,
-                        conversation_history=focused_history,
-                    )
+                    # Retry up to 3 times for correction rerun
+                    model_text = None
+                    for attempt in range(3):
+                        model_text = await generate_chat_with_nim(
+                            system_prompt=augmented_system + correction,
+                            user_message=chat_user_message,
+                            conversation_history=focused_history,
+                        )
+                        if model_text is not None:
+                            break
+                        print(f"[RETRY] Correction rerun failed (attempt {attempt + 1}/3), retrying...")
+                        await asyncio.sleep(1)
                     if model_text is None:
                         await message.reply(
                             "❌ Sorry, I couldn't generate a response. "
@@ -328,6 +393,16 @@ async def on_message(message):
 
             # Strip any input scaffolding the model echoed back before storing/sending.
             model_text = sanitize_model_output(model_text)
+
+            # Guard against an empty reply (model returned blank, or its whole
+            # response was scaffolding that got stripped). Discord rejects empty
+            # messages with HTTP 400 (error 50006).
+            if not model_text or not model_text.strip():
+                print("[WARN] Empty model_text after sanitize; sending fallback.")
+                await message.reply(
+                    "Sorry, I blanked on that one — mind rephrasing?"
+                )
+                return
 
             model_content = types.Content(role="model", parts=[types.Part(text=model_text)])
             await conversation_mgr.append_message(channel_id, model_content, user_id=None, user_name=None)

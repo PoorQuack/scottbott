@@ -30,7 +30,7 @@ XAI_IMAGE_MODERATION = os.getenv("XAI_IMAGE_MODERATION", "none")
 # NVIDIA NIM
 NIM_API_KEY = os.getenv("NIM_API_KEY")
 NIM_BASE_URL = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.2-3b-instruct")
+NIM_MODEL = os.getenv("NIM_MODEL", "z-ai/glm-5.1")
 NIM_MODEL_COMPLEX = os.getenv("NIM_MODEL_COMPLEX", "moonshotai/kimi-k2.6")
 try:
     NIM_TIMEOUT_SIMPLE = float(os.getenv("NIM_TIMEOUT_SIMPLE", "30"))
@@ -45,6 +45,33 @@ try:
 except ValueError:
     NIM_TIMEOUT = 30.0
 NIM_REASONING_EFFORT = os.getenv("NIM_REASONING_EFFORT", "high")
+# NVIDIA Stable Diffusion 3.5 Large image endpoint (auth uses NIM_API_KEY)
+NVIDIA_IMAGE_URL = os.getenv(
+    "NVIDIA_IMAGE_URL",
+    "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-5-large",
+)
+
+# === Voice chat (NVIDIA Riva gRPC: Whisper STT + Magpie TTS) ===
+# Both run on the NVCF gRPC gateway and authenticate with NIM_API_KEY.
+RIVA_GRPC_URI = os.getenv("RIVA_GRPC_URI", "grpc.nvcf.nvidia.com:443")
+WHISPER_FUNCTION_ID = os.getenv(
+    "WHISPER_FUNCTION_ID", "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
+)
+# NVIDIA parakeet-ctc-0.6b-asr (English, fast, CTC). Same Riva gRPC endpoint.
+PARAKEET_FUNCTION_ID = os.getenv(
+    "PARAKEET_FUNCTION_ID", "d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965"
+)
+# Which ASR model the bot uses for transcription: "parakeet" or "whisper".
+ASR_MODEL = os.getenv("ASR_MODEL", "parakeet").lower()
+ASR_FUNCTION_ID = PARAKEET_FUNCTION_ID if ASR_MODEL == "parakeet" else WHISPER_FUNCTION_ID
+MAGPIE_FUNCTION_ID = os.getenv(
+    "MAGPIE_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969"
+)
+# Pick a voice from the Magpie playground at build.nvidia.com. Override in .env.
+MAGPIE_VOICE = os.getenv("MAGPIE_VOICE", "Magpie-Multilingual.EN-US.Sofia")
+VOICE_LANGUAGE_CODE = os.getenv("VOICE_LANGUAGE_CODE", "en-US")
+# How long (seconds) of silence marks the end of a user's utterance.
+VOICE_SILENCE_SECONDS = float(os.getenv("VOICE_SILENCE_SECONDS", "1.0"))
 try:
     NIM_MAX_TOKENS = int(os.getenv("NIM_MAX_TOKENS", "16384"))
 except ValueError:

@@ -6,11 +6,88 @@ import aiohttp
 import httpx
 import replicate
 import PIL.Image
+import base64
 from config import (
     REPLICATE_API_TOKEN,
     REPLICATE_IMAGE_MODEL,
     XAI_API_KEY,
+    NIM_API_KEY,
+    NVIDIA_IMAGE_URL,
 )
+
+
+async def generate_image_nvidia(
+    prompt: str,
+    negative_prompt: str = "",
+    aspect_ratio: str = "1:1",
+    steps: int = 50,
+    cfg_scale: float = 4.5,
+    seed: int = 0,
+) -> bytes:
+    """Generate an image via NVIDIA Stable Diffusion 3.5 Large.
+
+    Returns JPEG bytes, or None on failure.
+    """
+    if not NIM_API_KEY:
+        print("[ERROR] NIM_API_KEY not set for NVIDIA image generation")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {NIM_API_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "prompt": prompt,
+        "cfg_scale": cfg_scale,
+        "aspect_ratio": aspect_ratio,
+        "seed": seed,
+        "steps": steps,
+        "negative_prompt": negative_prompt,
+    }
+
+    try:
+        print(f"[DEBUG] NVIDIA SD3.5 generation: {prompt!r}")
+        start_time = time.time()
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.post(NVIDIA_IMAGE_URL, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        print(f"[DEBUG] NVIDIA SD3.5 finished in {time.time() - start_time:.1f}s")
+
+        # NVIDIA returns the image as base64 in one of a few possible shapes.
+        b64 = None
+        if isinstance(data, dict):
+            if data.get("image"):
+                b64 = data["image"]
+            elif data.get("artifacts"):
+                b64 = data["artifacts"][0].get("base64")
+            elif data.get("data"):
+                b64 = data["data"][0].get("b64_json") or data["data"][0].get("base64")
+        if not b64:
+            keys = list(data)[:10] if isinstance(data, dict) else type(data)
+            print(f"[ERROR] NVIDIA SD3.5 unexpected response shape: {keys}")
+            return None
+
+        # Strip a possible data-URI prefix
+        if b64.strip().startswith("data:") and "," in b64:
+            b64 = b64.split(",", 1)[1]
+        image_bytes = base64.b64decode(b64)
+
+        img = PIL.Image.open(io.BytesIO(image_bytes))
+        out = io.BytesIO()
+        img.convert("RGB").save(out, format="JPEG", quality=95)
+        out.seek(0)
+        return out.getvalue()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text[:300] if e.response is not None else ""
+        print(f"[ERROR] NVIDIA SD3.5 HTTP {e.response.status_code}: {body}")
+        return None
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] NVIDIA SD3.5 failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return None
 
 
 async def expand_prompt_with_grok(user_prompt: str) -> str:
