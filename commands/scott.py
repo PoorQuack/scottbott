@@ -48,9 +48,13 @@ async def handle_scott(ctx, arg, conversation_mgr):
 
     arg_lower = arg.strip().lower()
     if arg_lower == "join":
-        await ctx.send(await join_voice(ctx.bot, ctx))
+        _msg = await join_voice(ctx.bot, ctx)
+        if _msg:
+            await ctx.send(_msg)
     elif arg_lower == "leave":
-        await ctx.send(await leave_voice(ctx))
+        _msg = await leave_voice(ctx)
+        if _msg:
+            await ctx.send(_msg)
     elif arg_lower.startswith("say "):
         msg = await say_text(ctx, arg[4:].strip())
         if msg:

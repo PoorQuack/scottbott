@@ -45,6 +45,15 @@ from prompts import get_system_prompt
 _IN_RATE = 48000
 _TARGET_RATE = 16000
 
+# All debug WAVs go to <project>/voice_debug/ so they're always easy to find,
+# regardless of what directory the bot was launched from.
+_DEBUG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "voice_debug")
+
+
+def _debug_path(name: str) -> str:
+    os.makedirs(_DEBUG_DIR, exist_ok=True)
+    return os.path.join(_DEBUG_DIR, name)
+
 
 def _highpass(pcm16_mono: bytes, fc: float = 90.0, rate: int = _TARGET_RATE) -> bytes:
     """Biquad high-pass (RBJ cookbook) to strip sub-90Hz rumble that masks speech.
@@ -110,7 +119,12 @@ def _to_mono16k(raw48k_stereo: bytes) -> bytes:
         x = np.frombuffer(out, dtype=np.int16).astype(np.float64)
         rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
         peak = float(np.max(np.abs(x))) if len(x) else 0.0
-        print(f"[AUDIO] rms={rms:.0f} peak={peak:.0f}")
+        clip_pct = float(np.mean(np.abs(x) >= 32000) * 100) if len(x) else 0.0
+        print(f"[AUDIO] rms={rms:.0f} peak={peak:.0f} clipping={clip_pct:.2f}%")
+        if clip_pct >= 0.5:
+            print("[AUDIO] *** INPUT IS CLIPPING — your mic is too loud. "
+                  "Lower Discord Input Volume / Windows mic level. This distorts "
+                  "speech and makes Whisper hallucinate. ***")
         if rms < _SILENCE_RMS or peak < 1:
             print("[AUDIO] below silence threshold, skipping")
             return b''
@@ -120,11 +134,13 @@ def _to_mono16k(raw48k_stereo: bytes) -> bytes:
         out = x.tobytes()
 
     if _DEBUG_DUMP:
-        with wave.open(f"debug_{int(time.time())}.wav", "wb") as wf:
+        path = _debug_path(f"debug_{int(time.time())}.wav")
+        with wave.open(path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)  # 16-bit
             wf.setframerate(_TARGET_RATE)
             wf.writeframes(out)
+        print(f"[DEBUG] saved processed audio -> {path}")
 
     return out
 
@@ -144,7 +160,10 @@ class _ScottSink(voice_recv.AudioSink if _RECV_AVAILABLE else object):
         try:
             pcm = getattr(data, "pcm", b'')
             print(f"[SINK] packet from {user} len={len(pcm)}")
-            if user is None or self.session.speaking:
+            # Only stop listening during actual TTS playback (self.playing).
+            # Keep buffering while transcribing/thinking so we don't lose the
+            # rest of the user's sentence and fragment their speech.
+            if user is None or self.session.playing:
                 return
             if pcm:
                 self.session.feed(user.id, user.display_name, pcm)
@@ -158,13 +177,15 @@ class _ScottSink(voice_recv.AudioSink if _RECV_AVAILABLE else object):
 class VoiceSession:
     """Owns one voice connection and its conversation loop."""
 
-    def __init__(self, bot, voice_client, text_channel, guild_id):
+    def __init__(self, bot, voice_client, text_channel, guild_id, owner_id=None):
         self.bot = bot
         self.vc = voice_client
         self.text_channel = text_channel
         self.guild_id = guild_id
+        self.owner_id = owner_id   # only listen to the user who invited the bot
 
-        self.speaking = False
+        self.speaking = False   # busy handling an utterance (pauses VAD flushing)
+        self.playing = False    # TTS audio is actively playing (pauses listening)
         self._buffers = {}        # user_id -> bytearray
         self._names = {}          # user_id -> display_name
         self._last = {}           # user_id -> monotonic time of last packet
@@ -175,19 +196,37 @@ class VoiceSession:
 
     # ---- called from the recv thread ----
     def feed(self, user_id, name, pcm):
-        """Buffer RAW 48kHz stereo PCM untouched. All downmix/resample/cleanup
-        happens once per utterance at flush time (see _process_utterance) so we
-        never carry filter state across dropped packets — that per-packet
-        processing was the source of the low-frequency muffle."""
+        """Buffer RAW 48kHz stereo PCM with a CONTINUOUS timeline.
+
+        Critical: once a user starts talking we buffer EVERY packet, including
+        the silent gaps between words. Dropping silent packets (e.g. Krisp emits
+        true digital silence between words) splices the loud chunks together and
+        every splice is a waveform discontinuity = a click. On a long sentence
+        those stack into the 'static garbage' the audio turns into. So we only
+        drop silence BEFORE speech has started (idle), never mid-utterance.
+        """
+        # Only listen to the user who invited the bot; ignore everyone else.
+        if self.owner_id is not None and user_id != self.owner_id:
+            return
+
+        peak = 0
         if _NUMPY:
             arr = np.frombuffer(pcm, dtype=np.int16)
-            # Only skip pure silence (all near-zero) so it doesn't keep the VAD alive.
-            if arr.size and int(np.abs(arr.astype(np.int32)).max()) < 10:
-                return
+            if arr.size:
+                peak = int(np.abs(arr.astype(np.int32)).max())
+
         with self._lock:
+            already_active = bool(self._buffers.get(user_id))
+            # Idle (no utterance in progress) + this packet is silence -> ignore,
+            # so we don't accumulate dead air when nobody is speaking.
+            if not already_active and peak < 10:
+                return
+            # Speech started or already going: keep the WHOLE stream, gaps included.
             self._buffers.setdefault(user_id, bytearray()).extend(pcm)
             self._names[user_id] = name
-            self._last[user_id] = time.monotonic()
+            # Only loud packets reset the silence timer that ends the utterance.
+            if peak >= 10:
+                self._last[user_id] = time.monotonic()
 
     # ---- async loop on the bot event loop ----
     def start(self):
@@ -226,11 +265,13 @@ class VoiceSession:
         if _DEBUG_DUMP:
             # Dump the RAW, unprocessed 48kHz stereo exactly as captured, so we can
             # tell whether corruption is upstream (Discord/decode) or in our cleanup.
-            with wave.open(f"raw_{int(time.time())}.wav", "wb") as wf:
+            _rawpath = _debug_path(f"raw_{int(time.time())}.wav")
+            with wave.open(_rawpath, "wb") as wf:
                 wf.setnchannels(2)
                 wf.setsampwidth(2)
                 wf.setframerate(_IN_RATE)
                 wf.writeframes(raw48k)
+            print(f"[DEBUG] saved raw capture -> {_rawpath}")
         try:
             self.speaking = True
             pcm16_processed = await asyncio.to_thread(_to_mono16k, raw48k)
@@ -277,9 +318,11 @@ class VoiceSession:
             source = discord.FFmpegPCMAudio(tmp.name)
             if self.vc.is_playing():
                 self.vc.stop()
+            self.playing = True   # stop listening only while audio is playing
             self.vc.play(source, after=_after)
             await done.wait()
         finally:
+            self.playing = False
             try:
                 os.unlink(tmp.name)
             except OSError:
@@ -321,7 +364,7 @@ async def join_voice(bot, ctx) -> str:
         _sessions.pop(guild_id, None)
 
     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-    session = VoiceSession(bot, vc, ctx.channel, guild_id)
+    session = VoiceSession(bot, vc, ctx.channel, guild_id, owner_id=ctx.author.id)
     vc.listen(_ScottSink(session))
     session.start()
     _sessions[guild_id] = session

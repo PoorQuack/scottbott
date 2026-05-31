@@ -62,7 +62,10 @@ PARAKEET_FUNCTION_ID = os.getenv(
     "PARAKEET_FUNCTION_ID", "d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965"
 )
 # Which ASR model the bot uses for transcription: "parakeet" or "whisper".
-ASR_MODEL = os.getenv("ASR_MODEL", "parakeet").lower()
+# NOTE: Parakeet on NVCF is streaming-only and rejects offline_recognize
+# ("Unavailable model ... type=offline"), so use Whisper for the current
+# offline transcription path.
+ASR_MODEL = os.getenv("ASR_MODEL", "whisper").lower()
 ASR_FUNCTION_ID = PARAKEET_FUNCTION_ID if ASR_MODEL == "parakeet" else WHISPER_FUNCTION_ID
 MAGPIE_FUNCTION_ID = os.getenv(
     "MAGPIE_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969"
