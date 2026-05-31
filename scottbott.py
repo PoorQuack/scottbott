@@ -53,6 +53,16 @@ def sanitize_model_output(text: str) -> str:
         text,
         flags=re.MULTILINE,
     )
+    # Remove echoed/fabricated [WEB SEARCH RESULTS ...] ... [END SEARCH RESULTS] blocks
+    text = re.sub(
+        r"\[WEB SEARCH RESULTS.*?(?:\[END SEARCH RESULTS\]|\Z)",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Remove a stray standalone [WEB SEARCH RESULTS] marker line
+    text = re.sub(r"^\s*\[WEB SEARCH RESULTS.*?\]\s*$", "", text, flags=re.MULTILINE)
+
     # Remove echoed [Reply context — ...] lines
     text = re.sub(r"^\s*\[Reply context.*?\]\s*$", "", text, flags=re.MULTILINE)
     # Remove an echoed leading speaker prefix like "[Name] (ID:123): "
