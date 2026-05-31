@@ -331,7 +331,7 @@ async def join_voice(bot, ctx) -> str:
         pass  # disabled for now - router patch handles restarts
 
     bot.loop.create_task(_watchdog())
-    return f"🎙️ Joined **{channel.name}**. Talk to me — say my name and I'll reply out loud."
+    return None  # Silent join
 
 
 async def say_text(ctx, text: str) -> str:
